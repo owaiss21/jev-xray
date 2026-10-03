@@ -1,0 +1,52 @@
+{
+  "order": 4,
+  "title": "Support ticket",
+  "granularity": "word",
+  "state": "Hey, I upgraded to the annual plan yesterday but the dashboard still shows the free tier limits and the API keeps returning 403 on the export endpoint. Card was charged though. Can someone look at this today? We have a client demo tomorrow.",
+  "question": {
+    "type": "choice",
+    "instructions": "Which team should handle this support ticket?",
+    "criteria": {
+      "Billing": "Payments, invoices, plan changes and refunds",
+      "Technical": "Bugs, errors, API problems and outages",
+      "Sales": "Pricing questions, quotes and new deals"
+    }
+  },
+  "checks": [
+    {
+      "type": "noul",
+      "instructions": "Was the customer charged?"
+    },
+    {
+      "type": "noul",
+      "instructions": "Does the customer report an error?"
+    },
+    {
+      "type": "score",
+      "instructions": "How urgent is this?",
+      "criteria": [
+        "Can wait",
+        "This week",
+        "Today",
+        "Right now"
+      ]
+    }
+  ],
+  "swaps": [
+    {
+      "label": "Error code",
+      "original": "403",
+      "groups": {
+        "Error codes": [
+          "401",
+          "403",
+          "500",
+          "429"
+        ],
+        "No error": [
+          "the old data"
+        ]
+      }
+    }
+  ]
+}

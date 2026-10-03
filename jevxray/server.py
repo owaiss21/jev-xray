@@ -21,7 +21,7 @@ from .question import Question
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
-EXAMPLES = ROOT / "examples"
+SCENARIOS = ROOT / "scenarios"
 
 
 class QuestionIn(BaseModel):
@@ -46,8 +46,12 @@ class XrayIn(DecideIn):
     granularity: str = Field("word", pattern="^(word|phrase|sentence)$")
 
 
+class AskIn(BaseModel):
+    state: str
+    questions: list[QuestionIn] = Field(min_length=1, max_length=16)
+
+
 class FlipIn(XrayIn):
-    threshold: float = 0.5
     max_removed: int = Field(30, ge=1, le=200)
 
 
@@ -83,10 +87,10 @@ def create_app(backend: Backend | None = None) -> FastAPI:
     def health():
         return model.info()
 
-    @app.get("/api/examples")
-    def examples():
+    @app.get("/api/scenarios")
+    def scenarios():
         items = []
-        for path in sorted(EXAMPLES.glob("*.json")):
+        for path in sorted(SCENARIOS.glob("*.json")):
             data = json.loads(path.read_text(encoding="utf-8"))
             data["id"] = path.stem
             items.append(data)
@@ -103,6 +107,20 @@ def create_app(backend: Backend | None = None) -> FastAPI:
             "cached": reading.cached,
         }
 
+    @app.post("/api/ask")
+    def ask(body: AskIn):
+        """Several questions about the same text. Answers stream back in order."""
+        state = need_text(body.state)
+        questions = [q.build() for q in body.questions]
+
+        def answers():
+            for i, q in enumerate(questions):
+                reading = model.read(state, q)
+                yield {"event": "answer", "i": i, "probs": reading.probs, "value": reading.value,
+                       "seconds": reading.seconds, "cached": reading.cached}
+
+        return stream(answers())
+
     @app.post("/api/xray")
     def run_xray(body: XrayIn):
         return stream(xray(model, need_text(body.state), body.question.build(), body.granularity))
@@ -110,7 +128,7 @@ def create_app(backend: Backend | None = None) -> FastAPI:
     @app.post("/api/flip")
     def run_flip(body: FlipIn):
         q = body.question.build()
-        return stream(flip(model, need_text(body.state), q, body.granularity, body.threshold, body.max_removed))
+        return stream(flip(model, need_text(body.state), q, body.granularity, body.max_removed))
 
     @app.post("/api/swap")
     def run_swap(body: SwapIn):

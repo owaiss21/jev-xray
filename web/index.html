@@ -4,169 +4,59 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>jev-xray</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%230b0b0b%22/%3E%3Crect x=%227%22 y=%2219%22 width=%224%22 height=%226%22 rx=%221%22 fill=%22%23e34948%22/%3E%3Crect x=%2214%22 y=%2213%22 width=%224%22 height=%2212%22 rx=%221%22 fill=%22%23fcfcfb%22/%3E%3Crect x=%2221%22 y=%227%22 width=%224%22 height=%2218%22 rx=%221%22 fill=%22%232a78d6%22/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%230f172a%22/%3E%3Crect x=%227%22 y=%2219%22 width=%224%22 height=%226%22 rx=%221%22 fill=%22%23e34948%22/%3E%3Crect x=%2214%22 y=%2213%22 width=%224%22 height=%2212%22 rx=%221%22 fill=%22%23ffffff%22/%3E%3Crect x=%2221%22 y=%227%22 width=%224%22 height=%2218%22 rx=%221%22 fill=%22%232a78d6%22/%3E%3C/svg%3E">
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
-  <header class="top">
-    <div class="brand">
-      <h1>jev-xray</h1>
-      <p>See why a decision model decided what it did.</p>
-    </div>
-    <div class="backend" id="backend" title="The model answering every question on this page"><span class="dot"></span><span id="backend-label">connecting…</span></div>
+  <header class="topbar">
+    <div class="logo">jev-xray</div>
+    <div class="tagline">See how a decision model reaches its answer</div>
+    <nav class="scenarios" id="scenarios" aria-label="Scenarios"></nav>
+    <div class="model" id="model" title="Model answering every question on this page"><i></i><span>connecting</span></div>
   </header>
 
-  <section class="intro">
-    <p>
-      Models like Jev don't write an answer. They read your text and return a <b>probability for every option you give them</b>.
-      There's no explanation to read, but a probability can be measured. This page changes your text a little at a time and watches how the answer moves.
-    </p>
-  </section>
-
-  <nav class="modes" role="tablist" aria-label="What do you want to find out?">
-    <button role="tab" data-mode="xray" aria-selected="true">
-      <b>Which words mattered?</b>
-      <span>Removes each word on its own and measures the change.</span>
-    </button>
-    <button role="tab" data-mode="flip">
-      <b>How close is it to changing?</b>
-      <span>Finds the fewest words to delete to flip the answer.</span>
-    </button>
-    <button role="tab" data-mode="swap">
-      <b>Is it fair?</b>
-      <span>Swaps one thing, like a name, and compares.</span>
-    </button>
-    <button role="tab" data-mode="live">
-      <b>Play with it</b>
-      <span>Edit the text and watch the answer update.</span>
-    </button>
-  </nav>
-
-  <main class="workbench">
-    <form class="setup" id="setup" autocomplete="off" novalidate>
-      <div class="example-row">
-        <label for="example">Start from an example</label>
-        <select id="example"></select>
+  <main class="layout">
+    <section class="panel case" aria-label="Case">
+      <div class="panel-head">
+        <h2>Case</h2>
+        <button class="ghost" id="edit-case" type="button">Edit</button>
       </div>
-
-      <section class="step">
-        <h2><span class="n">1</span>Your text</h2>
-        <p class="hint" data-show="xray flip live">Anything the model should judge: an email, a support ticket, a review, a resume.</p>
-        <p class="hint" data-show="swap">Paste the text as it is. You'll pick what to swap in step 3.</p>
-        <textarea id="state" rows="9" spellcheck="false" placeholder="Paste or type text here"></textarea>
-      </section>
-
-      <section class="step">
-        <h2><span class="n">2</span>Your question</h2>
-        <label class="label" for="instructions">What should the model decide?</label>
-        <input id="instructions" placeholder="e.g. Is this email a scam?">
-
-        <span class="label">How should it answer?</span>
-        <div class="segmented" id="qtype" role="radiogroup">
-          <button type="button" data-type="noul" role="radio">Yes or no</button>
-          <button type="button" data-type="choice" role="radio">Pick one option</button>
-          <button type="button" data-type="score" role="radio">Rate on a scale</button>
-        </div>
-
-        <div id="options-box">
-          <span class="label" id="options-title">Options</span>
-          <p class="hint" id="options-hint"></p>
-          <div id="options" class="rows"></div>
-          <button type="button" class="link" id="add-option">+ Add option</button>
-        </div>
-
-        <div id="watch-box">
-          <label class="label" for="target">Measure the effect on</label>
-          <select id="target"></select>
-          <p class="hint">Results show what pushes the answer towards this option, and what pushes it away.</p>
-        </div>
-      </section>
-
-      <section class="step" data-show="swap">
-        <h2><span class="n">3</span>What to swap</h2>
-        <label class="label" for="original">Swap out these words</label>
-        <input id="original" placeholder="e.g. Jordan Taylor">
-        <p class="hint" id="found"></p>
-        <span class="label">Try these instead <em>(one per line)</em></span>
-        <div id="groups" class="groups"></div>
-        <button type="button" class="link" id="add-group">+ Add a second group to compare</button>
-      </section>
-
-      <section class="step" data-show="xray flip">
-        <h2><span class="n">3</span>Settings</h2>
-        <span class="label">Remove one at a time</span>
-        <div class="segmented" id="granularity" role="radiogroup">
-          <button type="button" data-g="word" role="radio">Word</button>
-          <button type="button" data-g="phrase" role="radio">Phrase</button>
-          <button type="button" data-g="sentence" role="radio">Sentence</button>
-        </div>
-        <p class="hint">Words are the most detailed, phrases usually read best, sentences are fastest.</p>
-        <div data-show="flip">
-          <label class="label" for="threshold">Count it as flipped when it crosses <b id="threshold-value">50%</b></label>
-          <input id="threshold" type="range" min="10" max="90" step="5" value="50">
-        </div>
-      </section>
-
-      <div class="error" id="error" role="alert" hidden></div>
-      <div class="run" data-show="xray flip swap">
-        <button type="submit" class="primary" id="run">Run</button>
-        <p class="estimate" id="estimate"></p>
-        <div class="progress" id="progress" hidden>
-          <div class="bar"><div id="progress-fill"></div></div>
-          <div class="progress-row"><span id="progress-text"></span><button type="button" class="link" id="stop">Stop</button></div>
-        </div>
-      </div>
-    </form>
-
-    <section class="output" aria-live="polite">
-      <div class="card answer" id="answer" hidden>
-        <h3>The model's answer <span class="muted" id="answer-note"></span></h3>
-        <div class="dist" id="answer-dist"></div>
-      </div>
-
-      <div class="card" data-panel="xray">
-        <div class="empty" id="xray-empty">
-          <h3>What you'll see</h3>
-          <p>Your text, colored word by word. <span class="chip pos">Blue</span> words were pushing the answer towards the option you picked. <span class="chip neg">Red</span> words were pushing it away. The stronger the color, the bigger the effect.</p>
-          <p class="muted">Each word costs one call to the model, so longer texts take longer.</p>
-        </div>
-        <div id="xray-out" hidden>
-          <div class="result-head" id="xray-head"></div>
-          <div class="legend"><span><i class="sw neg"></i>pushes away</span><span class="scale"></span><span><i class="sw pos"></i>pushes towards</span><span class="muted">hover a word for exact numbers</span></div>
-          <div class="reading" id="xray-text"></div>
-          <div id="xray-top"></div>
-        </div>
-      </div>
-
-      <div class="card" data-panel="flip" hidden>
-        <div class="empty" id="flip-empty">
-          <h3>What you'll see</h3>
-          <p>The smallest set of deletions that changes the decision, crossed out in your text, and how the answer moved with each one.</p>
-          <p class="muted">If a couple of words can flip it, the decision is fragile. If nothing small flips it, the model is sure of itself.</p>
-        </div>
-        <div id="flip-out" hidden>
-          <div class="result-head" id="flip-head"></div>
-          <div class="reading" id="flip-text"></div>
-          <div id="flip-chart"></div>
-        </div>
-      </div>
-
-      <div class="card" data-panel="swap" hidden>
-        <div class="empty" id="swap-empty">
-          <h3>What you'll see</h3>
-          <p>The same text asked once per value you listed, with only the swapped words changed. Each dot is one version. If two groups land in different places, the swap is the only thing that could explain it.</p>
-        </div>
-        <div id="swap-out" hidden>
-          <div class="result-head" id="swap-head"></div>
-          <div id="swap-chart"></div>
-          <details id="swap-table-wrap"><summary>Every value as a table</summary><div id="swap-table"></div></details>
-        </div>
-      </div>
-
-      <div class="card" data-panel="live" hidden>
-        <div class="result-head" id="live-head"><p class="muted">Edit the text on the left. The answer updates a moment after you stop typing.</p></div>
-      </div>
+      <div class="doc" id="doc"></div>
+      <textarea class="doc-edit" id="doc-edit" spellcheck="false" hidden></textarea>
+      <div class="doc-legend" id="doc-legend" hidden></div>
     </section>
+
+    <div class="side">
+      <section class="panel decision" aria-label="Decision" aria-live="polite">
+        <div class="panel-head">
+          <h2 id="question-text"></h2>
+          <button class="ghost" id="edit-question" type="button">Edit</button>
+        </div>
+        <div id="question-editor" hidden></div>
+        <div class="verdict" id="verdict"></div>
+        <div class="options" id="options"></div>
+      </section>
+
+      <section class="panel checks" aria-label="Checks">
+        <div class="panel-head">
+          <h2>What it checked</h2>
+          <span class="tip" tabindex="0" data-tip="Each line is a separate question about the same case. Jev can't explain itself in words, but it can answer the facts its decision depends on.">?</span>
+        </div>
+        <ul class="check-list" id="checks"></ul>
+        <form class="add-check" id="add-check" autocomplete="off">
+          <input id="new-check" placeholder="Ask another yes/no question about this case">
+        </form>
+      </section>
+
+      <section class="panel tools" aria-label="Tools">
+        <div class="tabs" role="tablist" id="tool-tabs">
+          <button role="tab" data-tool="why" aria-selected="true">Why</button>
+          <button role="tab" data-tool="flip">What flips it</button>
+          <button role="tab" data-tool="swap">Swap test</button>
+        </div>
+        <div class="tool" id="tool"></div>
+      </section>
+    </div>
   </main>
 
   <div class="tooltip" id="tooltip" role="tooltip" hidden></div>

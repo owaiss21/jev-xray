@@ -13,10 +13,21 @@ def lines(response):
     return [json.loads(line) for line in response.text.splitlines() if line.strip()]
 
 
-def test_health_and_examples():
+def test_health_and_scenarios():
     assert client.get("/api/health").json()["backend"] == "fake"
-    examples = client.get("/api/examples").json()
-    assert {e["id"] for e in examples} >= {"spam", "hiring_names"}
+    scenarios = client.get("/api/scenarios").json()
+    assert [s["id"] for s in scenarios][:2] == ["parcel", "hiring"]
+    for s in scenarios:
+        assert s["checks"] and s["swaps"]
+        for test in s["swaps"]:
+            assert test["original"] in s["state"]
+
+
+def test_ask_answers_every_question_in_order():
+    questions = [QUESTION, {"type": "noul", "instructions": "Was the customer charged?"}]
+    events = lines(client.post("/api/ask", json={"state": "I was charged twice", "questions": questions}))
+    assert [e["i"] for e in events] == [0, 1]
+    assert set(events[1]["probs"]) == {"true", "false"}
 
 
 def test_decide():
@@ -45,3 +56,9 @@ def test_swap_without_slot_is_422():
 
 def test_index_served():
     assert "jev-xray" in client.get("/").text
+
+
+def test_cli_parses():
+    from jevxray import cli
+
+    assert cli.main(["--backend", "fake", "flip", "scenarios/ticket.json"]) == 0

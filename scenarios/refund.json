@@ -1,0 +1,47 @@
+{
+  "order": 3,
+  "title": "Refund request",
+  "granularity": "phrase",
+  "state": "Return policy\n1. With a receipt: unopened items can be returned within 30 days for a full refund.\n2. Without a receipt: unopened items can be exchanged for store credit within 14 days. After 14 days, no return.\n3. Opened items can never be returned.\n\nCustomer: I bought these headphones 12 days ago. The box is still sealed, but I lost the receipt. Can I get my money back?",
+  "question": {
+    "type": "choice",
+    "instructions": "Following the return policy, what should the customer be offered?",
+    "criteria": {
+      "Full refund": "Money back",
+      "Store credit": "Credit to spend in the store",
+      "No return": "The return is refused"
+    }
+  },
+  "checks": [
+    {
+      "type": "noul",
+      "instructions": "Does the customer have a receipt?"
+    },
+    {
+      "type": "noul",
+      "instructions": "Was the item bought within the last 14 days?"
+    },
+    {
+      "type": "noul",
+      "instructions": "Is the item still unopened?"
+    }
+  ],
+  "swaps": [
+    {
+      "label": "Days since purchase",
+      "original": "12 days ago",
+      "groups": {
+        "Within 14 days": [
+          "2 days ago",
+          "7 days ago",
+          "13 days ago"
+        ],
+        "After 14 days": [
+          "16 days ago",
+          "25 days ago",
+          "40 days ago"
+        ]
+      }
+    }
+  ]
+}

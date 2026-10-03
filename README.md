@@ -1,90 +1,66 @@
 # jev-xray
 
-**Jev can't explain its decisions. So this measures them.**
+**See how a decision model reaches its answer.**
 
-![X-ray running on a support ticket: two words keep it away from billing](docs/img/xray-live.gif)
+![A missing-parcel case: the answer, the facts the model checked, and the parts of the text it relied on](docs/img/demo.gif)
 
-[Jev](https://typesafe.ai) is a new kind of model from TypeSafe AI. You give it some text and a question, and instead of writing an answer it hands back a probability for every option you defined. No prose, no reasoning, just numbers.
+[Jev](https://typesafe.ai) is a new kind of model from TypeSafe AI. You give it some text and a question, and instead of writing an answer it returns a probability for every option you wrote. No prose, no explanation.
 
-The first reaction most people have is "so it's a classifier". The second is "then how do I know *why* it decided that?" Simon Willison raised exactly this when it launched: you get an opaque score, which makes bias hard to spot.
+That makes it easy to file under "classifier". It isn't really one. A classifier learns a fixed set of labels from training data. Jev takes the question and the options with each request, reads whatever rules and facts are in the text, and weighs them against each other. Ask it whether a customer is owed a refund under a return policy and it has to combine the policy, the purchase date and the missing receipt. That's reasoning, even if it never writes a word of it down.
 
-This project starts from a simple observation. Because the output is a number and not a paragraph, you can do experiments on it. Take a word out and ask again. Swap one name for another and ask again. Keep deleting until the answer flips. A chatbot's answer is hard to compare from one run to the next; a probability isn't. jev-xray turns that into four tools you can point at any decision, each answering one plain question.
+The catch is that you can't see any of it. jev-xray makes it visible. It asks the model the facts its decision depends on, highlights the parts of the text it leaned on, finds the smallest edit that changes its mind, and checks whether it reacts to things it shouldn't.
 
-## What Jev actually is
+## What's on the screen
 
-Every call looks the same:
+![The parcel case with every part of the screen filled in](docs/img/parcel.png)
 
-```
-state      the text you care about (an email, a ticket, a resume, a log line)
-question   one of three shapes, with options you write at call time
-             noul    yes / no                     -> P(yes)
-             choice  pick one of up to 255 options -> a probability for each
-             score   place it on 2 to 10 levels    -> a probability for each level
-answer     the distribution, read from the model in one pass. Nothing is generated.
-```
+- **The answer.** The option the model picked and the probability it gave every other option.
+- **What it checked.** Extra questions about single facts in the case, each answered separately. Jev can't tell you its reasoning, but it will tell you whether it thinks the addresses match. You can add your own.
+- **Why.** Each phrase is removed in turn and the question asked again. Blue text was pushing towards the answer, red was pushing away. This runs on its own when a case loads.
+- **What flips it.** The fewest deletions that make a different option win.
+- **Swap test.** Replace one thing (a name, a date, a tech stack) with a list of alternatives and see whether the answer moves.
 
-Two things make this more than a classifier:
+Edit the case or the question and everything re-asks itself.
 
-- **The labels aren't baked in.** A classifier is trained on fixed classes. Here the options are just words you send with each request, so the same model sorts tickets, grades essays and judges whether a resume deserves an interview.
-- **The probabilities are meant to be honest.** TypeSafe trains for calibration, so 0.8 should be right about 80% of the time. That turns the output into a measurement you can compare across inputs, which is the whole trick this repo relies on.
+## The four cases
 
-## The four views
+**Missing parcel.** Tracking says delivered to 17 Elm Street, the customer lives at 71 Elm Street, and their door is a different color. The model answers "Wrong address" (97%), and its checks show why: the addresses don't match (No, 76%) and neither does the door (No, 89%). The Why view lights up the customer's address.
 
-Every view works the same way: paste some text, write a question and its options, press the button. The model's raw answer always sits at the top of the results, so you can see exactly what it returned before anything was changed.
+**Job application.** A senior frontend role that asks for React and TypeScript, and a candidate who has both. Two swap tests on the same resume:
 
-### Which words mattered?
+| Swap the candidate's name | Swap the tech stack |
+|---|---|
+| ![Twelve names, the answer stays at 94 to 95%](docs/img/swap-name.png) | ![Other stacks drop the answer to about 12%](docs/img/swap-stack.png) |
 
-![Which words mattered: a support ticket, colored by how much each word moved the answer](docs/img/xray.png)
+Twelve Anglo and Muslim names all land between 94% and 95%. Swap React + TypeScript for Angular, Vue, jQuery or Svelte and it falls to about 12%. That's the behavior you want: it responds to what the job asked for and ignores who's asking.
 
-Each word (or phrase, or sentence) is removed on its own and the question is asked again. Blue means the piece was pushing the answer *towards* the option you're measuring, red means it was pushing *away*. Hover any piece to see the exact number without it.
+**Refund request.** This one catches the model out. The policy says that without a receipt you get store credit within 14 days and nothing after. The model gets the base case right (store credit), and its checks correctly find no receipt and a purchase inside 14 days. But the swap test moves the purchase to 16, 25 and 40 days ago, and it still offers store credit (96% on average). It can read the date but doesn't apply the cutoff. Without the swap test you'd never know.
 
-In the screenshot, a customer writes about an annual plan upgrade, a card charge and an API error. The model sends it to the technical team, with an 8% chance of billing. Almost all of that rests on two tokens: `403` and `endpoint.` Remove "403" alone and the chance of billing goes from 8% to 38%.
+![The date swap: answers that should drop to "No return" stay on store credit](docs/img/refund.png)
 
-Sometimes the answer isn't where you'd look. In the restaurant review example, the single word doing the most to keep the rating up is "Still,", probably because it's what turns a list of complaints into "but I'd go back".
+**Support ticket.** A customer mentions an upgrade, a card charge and a 403 error. The model routes it to the technical team (93%). Delete two words, `403` and `endpoint.`, and it goes to billing instead. A decision that close to the edge is one you'd want a person to look at.
 
-Leave-one-out isn't a perfect explanation. Words interact, and removing one can leave the rest saying the same thing. Phrases are usually the most readable unit, which is why most examples default to them.
+![Two deletions turn a technical ticket into a billing one](docs/img/flip.png)
 
-### How close is it to changing?
+## Experiment: does the name matter? Does the stack?
 
-![Deleting two words turns a technical ticket into a billing ticket](docs/img/flip.png)
+`experiments/name_vs_stack` scales the job-application test up. Six engineering roles (frontend, backend, data, iOS, platform, ML), each with a candidate who clearly meets the must-haves. The model is asked *"Should this candidate be invited to a first interview?"* while one thing changes at a time:
 
-This view ranks every piece by how much it holds the answer up, removes them strongest first until the probability crosses a threshold, then tries putting each one back to see if it was really needed. What's left is a small set of deletions that changes the decision.
+- **the name**: 12 Anglo and 12 Muslim names, everything else identical
+- **the stack** on the latest job: four stacks the role didn't ask for
 
-On the same ticket: **delete two words, `403` and `endpoint.`, and the chance of billing goes from 8% to 83%.** Nothing about the billing problem changed. The model just stopped seeing the error code.
+![Name swaps cluster around zero; stack swaps drop by 70 to 90 points](experiments/name_vs_stack/results/jevk5-4b-v0.3-q4-k-m.gguf.png)
 
-This is the most useful view for anyone building on a decision model, because it shows how close each answer is to the edge. If two words can flip it, you probably want a human to look at it.
+174 calls to JevK5 4B:
 
-### Is it fair?
+- **Names barely register.** Anglo names scored 0.85 points *lower* than Muslim names on average (95% CI -1.5 to -0.3). No single name moved the answer by more than 4 points.
+- **The stack dominates.** A stack the job didn't ask for dropped the answer by 80 points on average, and by at least 71 for every role.
 
-![The same resume under twelve different names, in two groups](docs/img/swap.png)
-
-Paste your text as it is, type the words you want to swap out (a name, a university, a city), and list what to try instead, in one or two groups. Every occurrence gets replaced, the same question is asked for each version, and the results land on one chart next to the original. If the groups end up in different places, the swap is the only thing that could have caused it.
-
-### Play with it
-
-The probability bar updates as you edit the text. On a laptop GPU each update takes a couple of seconds; on the hosted API it's closer to a few hundred milliseconds. Either way it's a quick way to get a feel for what the model is sensitive to.
-
-## Experiment: same resume, different name
-
-In 2004, Bertrand and Mullainathan mailed nearly 5,000 fake resumes to real employers in Boston and Chicago. The resumes were identical except for the name at the top. Names like Emily and Greg got 50% more callbacks than names like Lakisha and Jamal.
-
-`experiments/name_swap` runs the same idea against a decision model. Twelve synthetic resumes (six roles, each in a "solid" and a "borderline" version) are each sent 24 times, once per name from the original study, with the question *"Should this candidate be invited to an interview for the X role?"* That's 288 calls, and the only thing that changes between them is the name.
-
-![Per-resume gap between white-sounding and Black-sounding names](experiments/name_swap/results/jevk5-4b-v0.3-q4-k-m.gguf.png)
-
-What came back from JevK5 4B:
-
-- **Names barely move it.** Averaged over all twelve resumes, white-sounding names scored 0.006 *lower* than Black-sounding ones (95% CI -0.014 to -0.001). Eight of the twelve resumes leaned slightly towards Black-sounding names and four towards white-sounding ones.
-- **What gap there is lives in the borderline resumes.** On the strong resumes the gap is 0.001. On the borderline ones it's 0.011, and almost all of that comes from two of them: the registered nurse (0.04) and the warehouse supervisor (0.02).
-- **Gender did nothing measurable.** Female minus male names: +0.002 (95% CI -0.001 to +0.004).
-
-For scale: deleting one token, "403", moved the support ticket above by 0.30. That's fifty times the average effect of a name. On this model, with these resumes, the decision runs on content.
-
-That's a narrow result and it should be read that way. It's one small open model, quantized, on twelve resumes I wrote. It says nothing yet about TypeSafe's hosted Jev. Pointing the same script at it (`--backend typesafe`) costs a fraction of a cent, and the raw numbers for every call are saved next to the chart so anyone can check the analysis.
+That's roughly a hundredfold gap between what should matter and what shouldn't. It's one small open model on resumes I wrote, so read it as a check on this model, not a verdict on hiring by AI. The script runs against hosted Jev with `--backend typesafe`, and every raw answer is saved next to the chart.
 
 ## Running it
 
-You need Python 3.10+. Pick one of three backends.
+You need Python 3.10+.
 
 ```bash
 git clone https://github.com/owaiss21/jev-xray
@@ -92,58 +68,56 @@ cd jev-xray
 pip install -e .
 ```
 
-**Local and free (default).** [JevK5](https://github.com/allebee/jevk5) is an open-weight, Apache-2.0 model that answers the same three question types through the same readout idea. It runs through [llama.cpp](https://github.com/ggml-org/llama.cpp):
+**Local and free.** [JevK5](https://github.com/allebee/jevk5) is an open-weight, Apache-2.0 model that answers the same three question types as Jev. It runs through [llama.cpp](https://github.com/ggml-org/llama.cpp):
 
 ```bash
 pip install --no-deps "jevk5 @ git+https://github.com/allebee/jevk5@v0.3.0"
-./scripts/start-model.sh                    # or scripts\start-model.ps1 on Windows
-jev-xray serve                              # http://127.0.0.1:8000
+./scripts/start-model.sh          # or scripts\start-model.ps1 on Windows
+jev-xray serve                    # http://127.0.0.1:8000
 ```
 
-The 4B model in Q4_K_M is 2.7 GB and runs on a 4 GB laptop GPU, or on a CPU. If llama-server isn't on port 8080, set `JEVK5_URL`.
+The 4B model in Q4_K_M is 2.7 GB and fits a 4 GB laptop GPU, where each question takes one to two seconds. If llama-server isn't on port 8080, set `JEVK5_URL`.
 
-**Hosted Jev.** Set `TYPESAFE_API_KEY` and add `--backend typesafe`. Every call is cached in `~/.cache/jev-xray`, so re-running an example costs nothing.
+**Hosted Jev.** Set `TYPESAFE_API_KEY` and add `--backend typesafe`.
 
-**No model at all.** `jev-xray --backend fake serve` uses a deterministic keyword-overlap stand-in. It's dumb on purpose, but it lets you click through the whole UI and run the tests without downloading anything.
+**No model.** `jev-xray --backend fake serve` uses a keyword-matching stand-in so you can click around and run the tests. Its answers mean nothing.
 
-There's also a command line for scripting:
+Every answer is cached in `~/.cache/jev-xray`, so anything you've run before comes back instantly. There's a command line too:
 
 ```bash
-jev-xray xray examples/ticket.json
-jev-xray flip examples/ticket.json --granularity word
-jev-xray swap examples/hiring_names.json
-python experiments/name_swap/run.py
+jev-xray xray scenarios/parcel.json
+jev-xray flip scenarios/ticket.json --granularity word
+jev-xray swap scenarios/hiring.json --which 1
+python experiments/name_vs_stack/run.py
 ```
 
 ## How it's built
 
 ```
 jevxray/
-  question.py      the three question types and the one number we track
+  question.py      the three question types
   backends/        jevk5 (local), typesafe (hosted), fake; caching and timing live in base.py
-  probes/          xray.py, flip.py, swap.py; each one yields events as results come in
-  text.py          splits text into words, phrases or sentences and remembers their positions
-  server.py        FastAPI; long runs stream newline-delimited JSON so the page paints as it goes
-  cli.py
+  probes/          xray.py (remove each piece), flip.py (fewest deletions), swap.py (replace and compare)
+  text.py          splits text into words, phrases or sentences and keeps their positions
+  server.py        FastAPI; long runs stream newline-delimited JSON so the page fills in as it goes
 web/               plain HTML, CSS and JS, no build step
-examples/          the presets in the UI
-experiments/       the name-swap study and its saved results
+scenarios/         the four cases, their checks and swap tests
+experiments/       the name-versus-stack study and its results
 ```
 
-The probes don't know which model they're talking to. They call `backend.read(text, question)` and get back a probability per option. Adding another System One style model is one small class.
+The probes only ever call `backend.read(text, question)` and get a probability per option back, so supporting another model of the same kind is one small class.
 
 ## Things to keep in mind
 
-- **JevK5 is not Jev.** The numbers here come from JevK5 4B, quantized to 4 bits. TypeSafe's hosted model will give different answers, and the same experiments can be pointed at it with one flag.
-- **The same input gives the same output** on a given machine and model file, which is what makes the comparisons meaningful. Different quantizations or hardware shift the numbers slightly.
-- **Leave-one-out measures sensitivity, not intent.** A word with a big effect is one the model leans on. That's useful to know, but it isn't the same as the model "reasoning" about it.
-- **It's slow on small hardware.** Every piece of text costs one call. A 60-word X-ray takes about two minutes on a 4 GB laptop GPU.
+- **JevK5 is not Jev.** Everything above comes from JevK5 4B, quantized to 4 bits. TypeSafe's hosted model will answer differently.
+- **Removing a phrase measures what the model leans on**, not what it "thinks". Phrases can cover for each other, so a low score doesn't always mean a phrase was ignored.
+- **The checks are separate questions.** They show what the model believes about each fact, not the path it took to the answer. When they disagree with the answer, as in the refund case, that's worth knowing.
+- **Same input, same output** on a given machine and model file, which is what makes the comparisons fair.
 
 ## Credits
 
-- [JevK5](https://github.com/allebee/jevk5) by allebee: the open model and the GGUF readout this project uses locally.
+- [JevK5](https://github.com/allebee/jevk5) by allebee, the open model and its llama.cpp readout.
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) for running it on ordinary hardware.
-- Bertrand and Mullainathan, [*Are Emily and Greg More Employable than Lakisha and Jamal?*](https://www.aeaweb.org/articles?id=10.1257/0002828042002561) (2004), for the name lists.
 - [TypeSafe AI](https://typesafe.ai) for Jev and the `/v1/systemone` interface.
 
 Not affiliated with TypeSafe AI.

@@ -50,7 +50,9 @@ def test_xray_reports_every_segment():
     assert any(abs(e["effect"]) > 0 for e in result["segments_measured"])
 
 
-def test_flip_crosses_threshold_and_is_minimal():
+def test_flip_changes_the_answer_and_is_minimal():
+    from jevxray.probes.flip import top
+
     backend = FakeBackend()
     state = "Send money and bank details now to claim your money prize, bank transfer only"
     q = Question("noul", "Is this a scam asking for money or bank details?", {"true": "scam money bank details", "false": "normal message"})
@@ -58,13 +60,12 @@ def test_flip_crosses_threshold_and_is_minimal():
     base, done = events[0], events[-1]
     assert done["event"] == "done"
     if done["flipped"]:
-        above = base["value"] >= 0.5
-        assert (done["value"] < 0.5) if above else (done["value"] >= 0.5)
+        assert done["answer"] != base["answer"]
         parts = segments(state)
         for i in done["removed"]:
             kept = [j for j in done["removed"] if j != i]
-            value = backend.read(without(state, parts, set(kept)), q).value
-            assert (value >= 0.5) if above else (value < 0.5)
+            probs = backend.read(without(state, parts, set(kept)), q).probs
+            assert top(probs) == base["answer"]
 
 
 def test_swap_summarizes_groups():
@@ -105,3 +106,14 @@ def test_phrase_segments_split_on_commas():
         "please confirm your details:",
         "it takes a minute.",
     ]
+
+
+def test_phrases_keep_labels_with_their_values_and_numbers_whole():
+    text = "Tracking: delivered at 2:14 pm to 17 Elm Street.\nCustomer address: 71 Elm Street\nTotal: 1,000 dollars, paid."
+    assert [p.text for p in segments(text, "phrase")] == [
+        "Tracking: delivered at 2:14 pm to 17 Elm Street.",
+        "Customer address: 71 Elm Street",
+        "Total: 1,000 dollars,",
+        "paid.",
+    ]
+    assert all(text[p.start : p.end] == p.text for p in segments(text, "phrase"))

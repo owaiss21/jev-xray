@@ -1,0 +1,46 @@
+{
+  "order": 1,
+  "title": "Missing parcel",
+  "granularity": "phrase",
+  "state": "Tracking: Order #7120 was delivered at 2:14 pm and left at the front door of 17 Elm Street. The delivery photo shows a blue door.\n\nCustomer address: 71 Elm Street\nCustomer message: It says delivered but there's nothing here. My front door is green.",
+  "question": {
+    "type": "choice",
+    "instructions": "What most likely happened to this parcel?",
+    "criteria": {
+      "Delivered": "It reached the customer",
+      "Wrong address": "It was left at a different address",
+      "Stolen": "It was delivered correctly, then taken",
+      "Unclear": "Not enough information to tell"
+    }
+  },
+  "checks": [
+    {
+      "type": "noul",
+      "instructions": "Does the delivery address match the customer's address?"
+    },
+    {
+      "type": "noul",
+      "instructions": "Does the door in the delivery photo match the customer's door?"
+    },
+    {
+      "type": "noul",
+      "instructions": "Does the tracking say the parcel was delivered?"
+    }
+  ],
+  "swaps": [
+    {
+      "label": "Delivery address",
+      "original": "17 Elm Street",
+      "groups": {
+        "Matches the customer": [
+          "71 Elm Street"
+        ],
+        "Different house": [
+          "17 Elm Street",
+          "71 Oak Street",
+          "7 Elm Street"
+        ]
+      }
+    }
+  ]
+}

@@ -6,10 +6,12 @@ import re
 from dataclasses import dataclass
 
 WORD = re.compile(r"\S+")
-# A sentence ends at . ! ? (optionally followed by quotes/brackets) and whitespace, or at a blank line.
-SENTENCE = re.compile(r"[^.!?\n]+(?:[.!?]+[\"')\]]*|$)|[^\n]+", re.M)
+# Punctuation only ends a piece when whitespace (or the end) follows, so "2:14", "1,000" and
+# "No.17" stay whole.
+_CLOSE = r"[\"')\]]*"
+SENTENCE = re.compile(r"(?:[^\n.!?]|[.!?](?=\S))+(?:[.!?]+" + _CLOSE + r"(?=\s|$))?")
 # A phrase also ends at a comma, semicolon or colon: small enough to point at, big enough to mean something.
-PHRASE = re.compile(r"[^.!?,;:\n]+(?:[.!?,;:]+[\"')\]]*|$)|[^\n]+", re.M)
+PHRASE = re.compile(r"(?:[^\n.!?,;:]|[.!?,;:](?=\S))+(?:[.!?,;:]+" + _CLOSE + r"(?=\s|$))?")
 
 
 @dataclass(frozen=True)
@@ -28,13 +30,39 @@ def segments(text: str, granularity: str = "word") -> list[Segment]:
         matches = (m for m in pattern.finditer(text) if m.group().strip())
     else:
         raise ValueError("granularity must be 'word', 'phrase' or 'sentence'")
-    out = []
+    spans = []
     for m in matches:
         raw = m.group()
         lead = len(raw) - len(raw.lstrip())
-        piece = raw.strip()
         start = m.start() + lead
-        out.append(Segment(len(out), start, start + len(piece), piece))
+        spans.append((start, start + len(raw.strip())))
+    if granularity == "phrase":
+        spans = _attach_labels(text, spans)
+    return [Segment(i, s, e, text[s:e]) for i, (s, e) in enumerate(spans)]
+
+
+def _attach_labels(text: str, spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Glue a short label like "Customer address:" to what follows it on the same line.
+
+    On its own a label carries no meaning, so removing it only measures how confused the model
+    gets by a dangling value.
+    """
+    out: list[tuple[int, int]] = []
+    pending = None
+    for s, e in spans:
+        if pending is not None:
+            if "\n" not in text[pending[1] : s]:
+                s = pending[0]
+            else:
+                out.append(pending)
+            pending = None
+        piece = text[s:e]
+        if piece.endswith(":") and len(piece.split()) <= 3:
+            pending = (s, e)
+        else:
+            out.append((s, e))
+    if pending is not None:
+        out.append(pending)
     return out
 
 
