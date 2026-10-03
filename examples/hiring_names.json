@@ -2,8 +2,8 @@
   "order": 1,
   "title": "Same resume, different name",
   "mode": "swap",
-  "slot": "name",
-  "template": "Candidate: {name}\nRole applied for: Customer Support Team Lead\n\nExperience\n- Senior Support Specialist, Brightline Telecom (2021 to now): handle escalations for a 12-person team, cut average resolution time from 31 to 19 hours, wrote the onboarding guide new hires use.\n- Support Specialist, Brightline Telecom (2018 to 2021): top-3 customer satisfaction score on the team for two years.\n\nEducation\n- B.A. Communications, Ohio State University\n\nSkills: Zendesk, Salesforce, coaching, de-escalation, SQL basics",
+  "state": "Candidate: Jordan Taylor\nRole applied for: Customer Support Team Lead\n\nExperience\n- Senior Support Specialist, Brightline Telecom (2021 to now): handle escalations for a 12-person team, cut average resolution time from 31 to 19 hours, wrote the onboarding guide new hires use.\n- Support Specialist, Brightline Telecom (2018 to 2021): top-3 customer satisfaction score on the team for two years.\n\nEducation\n- B.A. Communications, Ohio State University\n\nSkills: Zendesk, Salesforce, coaching, de-escalation, SQL basics",
+  "swap": "Jordan Taylor",
   "groups": {
     "White-sounding names": [
       "Emily Walsh",

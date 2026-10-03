@@ -72,21 +72,30 @@ def test_swap_summarizes_groups():
     events = list(
         swap(
             backend,
-            "Applicant {name} has five years of experience.",
-            "name",
+            "Applicant Sam Lee has five years of experience. We met sam  lee last week.",
+            "Sam Lee",
             {"A": ["Alice", "Ann"], "B": ["Bob", "Ben", "Bill"]},
             Question("noul", "Should we interview this applicant?"),
         )
     )
-    done = events[-1]
-    assert done["calls"] == 5
+    start, done = events[0], events[-1]
+    assert start["occurrences"] == 2
+    assert done["calls"] == 6
     assert done["summary"]["A"]["n"] == 2 and done["summary"]["B"]["n"] == 3
     assert "_gap" in done["summary"]
 
 
-def test_swap_needs_placeholder():
-    with pytest.raises(ValueError):
-        list(swap(FakeBackend(), "no slot here", "name", {"A": ["x"]}, SPAM))
+def test_replace_every_occurrence():
+    from jevxray.probes.swap import replace
+
+    assert replace("Sam Lee met SAM LEE.", "sam lee", "Ann") == "Ann met Ann."
+
+
+def test_swap_errors_are_readable():
+    with pytest.raises(ValueError, match="Couldn't find"):
+        list(swap(FakeBackend(), "no name here", "Emily", {"A": ["x"]}, SPAM))
+    with pytest.raises(ValueError, match="at least one"):
+        list(swap(FakeBackend(), "Emily applied", "Emily", {"A": [" "]}, SPAM))
 
 
 def test_phrase_segments_split_on_commas():

@@ -2,13 +2,13 @@
 
 **Jev can't explain its decisions. So this measures them.**
 
-![X-ray of a support ticket: two words keep it away from billing](docs/img/xray-ticket.png)
+![X-ray running on a support ticket: two words keep it away from billing](docs/img/xray-live.gif)
 
 [Jev](https://typesafe.ai) is a new kind of model from TypeSafe AI. You give it some text and a question, and instead of writing an answer it hands back a probability for every option you defined. No prose, no reasoning, just numbers.
 
 The first reaction most people have is "so it's a classifier". The second is "then how do I know *why* it decided that?" Simon Willison raised exactly this when it launched: you get an opaque score, which makes bias hard to spot.
 
-This project starts from a simple observation. Because the output is a number and not a paragraph, you can do experiments on it. Take a word out and ask again. Swap one name for another and ask again. Keep deleting until the answer flips. A chatbot's answer is hard to compare from one run to the next; a probability isn't. jev-xray turns that into four tools you can point at any decision.
+This project starts from a simple observation. Because the output is a number and not a paragraph, you can do experiments on it. Take a word out and ask again. Swap one name for another and ask again. Keep deleting until the answer flips. A chatbot's answer is hard to compare from one run to the next; a probability isn't. jev-xray turns that into four tools you can point at any decision, each answering one plain question.
 
 ## What Jev actually is
 
@@ -30,35 +30,37 @@ Two things make this more than a classifier:
 
 ## The four views
 
-### X-ray: which words decided it
+Every view works the same way: paste some text, write a question and its options, press the button. The model's raw answer always sits at the top of the results, so you can see exactly what it returned before anything was changed.
 
-Each word (or phrase, or sentence) is removed on its own and the question is asked again. Blue means the piece was pushing the answer *towards* the option you're tracking, red means it was pushing *away*. Hover any piece to see the exact number without it.
+### Which words mattered?
 
-In the screenshot above, a customer writes about an annual plan upgrade, a card charge and an API error. The model sends it to the technical team (P(billing) = 0.08). The X-ray shows that almost all of that rests on two tokens: `403` and `endpoint.` Remove "403" alone and P(billing) jumps by 0.30.
+![Which words mattered: a support ticket, colored by how much each word moved the answer](docs/img/xray.png)
 
-![X-ray running live on a restaurant review](docs/img/xray-live.gif)
+Each word (or phrase, or sentence) is removed on its own and the question is asked again. Blue means the piece was pushing the answer *towards* the option you're measuring, red means it was pushing *away*. Hover any piece to see the exact number without it.
 
-Sometimes the answer isn't where you'd look. In the review above, the single word doing the most to keep the score up is "Still,", probably because it's what turns a list of complaints into "but I'd go back".
+In the screenshot, a customer writes about an annual plan upgrade, a card charge and an API error. The model sends it to the technical team, with an 8% chance of billing. Almost all of that rests on two tokens: `403` and `endpoint.` Remove "403" alone and the chance of billing goes from 8% to 38%.
+
+Sometimes the answer isn't where you'd look. In the restaurant review example, the single word doing the most to keep the rating up is "Still,", probably because it's what turns a list of complaints into "but I'd go back".
 
 Leave-one-out isn't a perfect explanation. Words interact, and removing one can leave the rest saying the same thing. Phrases are usually the most readable unit, which is why most examples default to them.
 
-### Flip: the smallest change that flips it
+### How close is it to changing?
 
-![Flip: deleting two words turns a technical ticket into a billing ticket](docs/img/flip-ticket.png)
+![Deleting two words turns a technical ticket into a billing ticket](docs/img/flip.png)
 
-Flip ranks every piece by how much it holds the answer up, removes them strongest first until the probability crosses a threshold, then tries putting each one back to see if it was really needed. What's left is a small set of deletions that changes the decision.
+This view ranks every piece by how much it holds the answer up, removes them strongest first until the probability crosses a threshold, then tries putting each one back to see if it was really needed. What's left is a small set of deletions that changes the decision.
 
-On the same ticket: **delete two words, `403` and `endpoint.`, and P(billing) goes from 0.08 to 0.83.** Nothing about the billing problem changed. The model just stopped seeing the error code.
+On the same ticket: **delete two words, `403` and `endpoint.`, and the chance of billing goes from 8% to 83%.** Nothing about the billing problem changed. The model just stopped seeing the error code.
 
 This is the most useful view for anyone building on a decision model, because it shows how close each answer is to the edge. If two words can flip it, you probably want a human to look at it.
 
-### Swap lab: same input, one thing changed
+### Is it fair?
 
-![Swap lab: the same resume under 24 different names](docs/img/swap-names.png)
+![The same resume under twelve different names, in two groups](docs/img/swap.png)
 
-Write the input once with a slot in it (`Candidate: {name}`), give two groups of values, and the swap lab fills the slot with each one and asks the same question. If the groups land in different places, the slot is the only thing that could have caused it.
+Paste your text as it is, type the words you want to swap out (a name, a university, a city), and list what to try instead, in one or two groups. Every occurrence gets replaced, the same question is asked for each version, and the results land on one chart next to the original. If the groups end up in different places, the swap is the only thing that could have caused it.
 
-### Live: watch it as you type
+### Play with it
 
 The probability bar updates as you edit the text. On a laptop GPU each update takes a couple of seconds; on the hosted API it's closer to a few hundred milliseconds. Either way it's a quick way to get a feel for what the model is sensitive to.
 

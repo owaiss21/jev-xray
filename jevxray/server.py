@@ -52,10 +52,16 @@ class FlipIn(XrayIn):
 
 
 class SwapIn(BaseModel):
-    template: str
-    slot: str = "name"
+    text: str
+    original: str
     groups: dict[str, list[str]]
     question: QuestionIn
+
+
+def need_text(text: str) -> str:
+    if not text.strip():
+        raise HTTPException(422, "Paste some text first.")
+    return text
 
 
 def stream(events: Iterator[dict]) -> StreamingResponse:
@@ -89,7 +95,7 @@ def create_app(backend: Backend | None = None) -> FastAPI:
     @app.post("/api/decide")
     def decide(body: DecideIn):
         question = body.question.build()
-        reading = model.read(body.state, question)
+        reading = model.read(need_text(body.state), question)
         return {
             "probs": reading.probs,
             "value": reading.value,
@@ -99,18 +105,18 @@ def create_app(backend: Backend | None = None) -> FastAPI:
 
     @app.post("/api/xray")
     def run_xray(body: XrayIn):
-        return stream(xray(model, body.state, body.question.build(), body.granularity))
+        return stream(xray(model, need_text(body.state), body.question.build(), body.granularity))
 
     @app.post("/api/flip")
     def run_flip(body: FlipIn):
         q = body.question.build()
-        return stream(flip(model, body.state, q, body.granularity, body.threshold, body.max_removed))
+        return stream(flip(model, need_text(body.state), q, body.granularity, body.threshold, body.max_removed))
 
     @app.post("/api/swap")
     def run_swap(body: SwapIn):
         q = body.question.build()
         try:
-            events = swap(model, body.template, body.slot, body.groups, q)
+            events = swap(model, need_text(body.text), body.original, body.groups, q)
             first = next(events)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc

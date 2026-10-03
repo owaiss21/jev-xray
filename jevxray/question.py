@@ -30,12 +30,14 @@ class Question:
     def __post_init__(self) -> None:
         if self.kind not in KINDS:
             raise ValueError(f"unknown question type {self.kind!r}, expected one of {KINDS}")
-        if self.kind == "choice" and not self.criteria:
-            raise ValueError("a choice question needs criteria")
+        if not str(self.instructions or "").strip():
+            raise ValueError("Write the question you want to ask.")
+        if self.kind == "choice" and (not self.criteria or len(self.criteria) < 2):
+            raise ValueError("Add at least two options to pick from.")
         if self.kind == "score" and (not isinstance(self.criteria, list) or len(self.criteria) < 2):
-            raise ValueError("a score question needs a list of at least two levels")
+            raise ValueError("A rating scale needs at least two levels.")
         if self.kind == "choice" and self.target is not None and self.target not in self.option_ids:
-            raise ValueError(f"target {self.target!r} is not one of the options {self.option_ids}")
+            raise ValueError(f"“{self.target}” isn't one of the options.")
 
     @property
     def option_ids(self) -> list[str]:

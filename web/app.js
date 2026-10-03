@@ -1,24 +1,59 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
-const fmt = (x, d = 2) => Number(x).toFixed(d);
-const signed = (x, d = 2) => (x >= 0 ? "+" : "−") + Math.abs(x).toFixed(d);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 const ui = {
   mode: "xray",
   qtype: "noul",
-  granularity: "word",
+  granularity: "phrase",
   examples: [],
   controller: null,
+  secPerCall: null, // learned from real (uncached) calls, used for time estimates
 };
 
-/* ---------- backend status ---------- */
+const RUN_LABEL = { xray: "Find the words that mattered", flip: "Find the smallest flip", swap: "Run the swap" };
+const GROUP_COLORS = ["var(--series-1)", "var(--series-2)"];
+
+/* ---------- numbers people can read ---------- */
+
+function shown(value, q) {
+  if (q.type === "score") {
+    const n = q.criteria.length;
+    return `${(1 + value * (n - 1)).toFixed(1)} / ${n}`;
+  }
+  const p = value * 100;
+  if (p > 0 && p < 1) return "<1%";
+  if (p < 100 && p > 99) return ">99%";
+  return `${Math.round(p)}%`;
+}
+
+function moved(delta, q) {
+  const sign = delta >= 0 ? "+" : "−";
+  if (q.type === "score") return `${sign}${Math.abs(delta * (q.criteria.length - 1)).toFixed(2)} levels`;
+  const pts = Math.abs(delta * 100);
+  return `${sign}${pts < 10 ? pts.toFixed(1) : Math.round(pts)} pts`;
+}
+
+const size = (delta, q) => moved(Math.abs(delta), q).slice(1);
+
+function watching(q) {
+  if (q.type === "noul") return `chance of “${q.target === "false" ? "No" : "Yes"}”`;
+  if (q.type === "choice") return `chance of “${q.target}”`;
+  return "average rating";
+}
+
+function duration(seconds) {
+  if (seconds < 60) return `${Math.max(1, Math.round(seconds))}s`;
+  return `${Math.round(seconds / 60)} min`;
+}
+
+/* ---------- backend pill ---------- */
 
 async function checkBackend() {
   const pill = $("#backend");
   try {
     const info = await (await fetch("/api/health")).json();
-    $("#backend-label").textContent = `${info.backend} · ${info.model}`;
+    $("#backend-label").textContent = info.backend === "fake" ? "fake model (testing only)" : `${info.backend} · ${info.model}`;
     pill.classList.add("ok");
   } catch {
     $("#backend-label").textContent = "server not reachable";
@@ -28,91 +63,150 @@ async function checkBackend() {
 
 /* ---------- question editor ---------- */
 
-function setQType(type) {
-  ui.qtype = type;
-  $$("#qtype button").forEach((b) => b.classList.toggle("on", b.dataset.type === type));
-  $("#options-field").hidden = type === "noul";
-  $("#options-label").textContent = type === "score" ? "Levels (lowest first, one per line)" : "Options (id: description, one per line)";
-  refreshTargets();
+function optionRow(name = "", desc = "") {
+  const row = document.createElement("div");
+  const isScore = ui.qtype === "score";
+  row.className = isScore ? "row" : "row with-desc";
+  row.innerHTML = isScore
+    ? `<span class="idx"></span><input class="name" placeholder="Describe this level" value="${esc(name)}"><button type="button" class="del" aria-label="Remove">×</button>`
+    : `<span class="idx"></span><input class="name" placeholder="Option" value="${esc(name)}"><input class="desc" placeholder="What it means (optional)" value="${esc(desc)}"><button type="button" class="del" aria-label="Remove">×</button>`;
+  $(".del", row).onclick = () => { row.remove(); renumber(); refreshTargets(); estimate(); };
+  $(".name", row).addEventListener("input", () => { refreshTargets(); liveSoon(); });
+  $(".desc", row)?.addEventListener("input", liveSoon);
+  $("#options").append(row);
+  renumber();
 }
 
-function parseOptions() {
-  const lines = $("#options").value.split("\n").map((l) => l.trim()).filter(Boolean);
-  if (ui.qtype === "score") return lines;
-  const out = {};
-  for (const line of lines) {
-    const i = line.indexOf(":");
-    const id = (i > 0 ? line.slice(0, i) : line).trim();
-    out[id] = (i > 0 ? line.slice(i + 1) : line).trim() || id;
+function renumber() {
+  $$("#options .row").forEach((r, i) => ($(".idx", r).textContent = ui.qtype === "score" ? i + 1 : "•"));
+}
+
+function setQType(type, options) {
+  ui.qtype = type;
+  $$("#qtype button").forEach((b) => {
+    b.classList.toggle("on", b.dataset.type === type);
+    b.setAttribute("aria-checked", String(b.dataset.type === type));
+  });
+  $("#options-box").hidden = type === "noul";
+  $("#watch-box").hidden = type === "score";
+  $("#options").innerHTML = "";
+  if (type === "choice") {
+    $("#options-title").textContent = "Options it can pick from";
+    $("#options-hint").textContent = "A short name for each, plus an optional description to make the meaning clear.";
+    $("#add-option").textContent = "+ Add option";
+    (options || [["", ""], ["", ""]]).forEach(([n, d]) => optionRow(n, d));
+  } else if (type === "score") {
+    $("#options-title").textContent = "Levels of the scale, lowest first";
+    $("#options-hint").textContent = "The model places your text somewhere between the first and last level.";
+    $("#add-option").textContent = "+ Add level";
+    (options || [["Very low"], ["Low"], ["Medium"], ["High"], ["Very high"]]).forEach(([n]) => optionRow(n));
   }
-  return out;
+  refreshTargets();
 }
 
 function refreshTargets(keep) {
   const sel = $("#target");
   const previous = keep ?? sel.value;
   let options = [];
-  if (ui.qtype === "noul") options = [["true", "yes"], ["false", "no"]];
-  else if (ui.qtype === "choice") options = Object.keys(parseOptions()).map((k) => [k, k]);
-  $("#target-field").hidden = ui.qtype === "score";
+  if (ui.qtype === "noul") options = [["true", "Yes"], ["false", "No"]];
+  else if (ui.qtype === "choice") options = $$("#options .name").map((i) => i.value.trim()).filter(Boolean).map((v) => [v, v]);
   sel.innerHTML = options.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("");
   if (options.some(([v]) => v === previous)) sel.value = previous;
 }
 
 function readQuestion() {
-  const q = { type: ui.qtype, instructions: $("#instructions").value.trim() };
-  if (ui.qtype !== "noul") q.criteria = parseOptions();
-  if (ui.qtype !== "score") q.target = $("#target").value;
+  const instructions = $("#instructions").value.trim();
+  if (!instructions) throw new Error("Write the question you want the model to decide (step 2).");
+  const q = { type: ui.qtype, instructions };
+  if (ui.qtype === "choice") {
+    const criteria = {};
+    for (const row of $$("#options .row")) {
+      const name = $(".name", row).value.trim();
+      if (!name) continue;
+      if (name in criteria) throw new Error(`The option “${name}” appears twice. Give each option a different name.`);
+      criteria[name] = $(".desc", row).value.trim() || name;
+    }
+    if (Object.keys(criteria).length < 2) throw new Error("Add at least two options for the model to pick from.");
+    q.criteria = criteria;
+    q.target = $("#target").value;
+  } else if (ui.qtype === "score") {
+    q.criteria = $$("#options .name").map((i) => i.value.trim()).filter(Boolean);
+    if (q.criteria.length < 2) throw new Error("A scale needs at least two levels.");
+  } else {
+    q.target = $("#target").value || "true";
+  }
   return q;
 }
 
-function targetLabel(q) {
-  if (q.type === "noul") return q.target === "false" ? "P(no)" : "P(yes)";
-  if (q.type === "choice") return `P(${q.target})`;
-  return "score";
+function readText() {
+  const text = $("#state").value;
+  if (!text.trim()) throw new Error("Paste some text first (step 1).");
+  return text;
 }
 
-/* ---------- swap groups ---------- */
+/* ---------- swap inputs ---------- */
 
-const GROUP_COLORS = ["var(--series-1)", "var(--series-2)"];
-
-function renderGroups(groups) {
-  const box = $("#groups");
-  box.innerHTML = "";
-  Object.entries(groups).forEach(([name, values], i) => addGroup(name, values, i));
+function occurrences(text, original) {
+  const words = original.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return 0;
+  const pattern = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+");
+  return (text.match(new RegExp(pattern, "gi")) || []).length;
 }
 
-function addGroup(name = "", values = [], index = $$("#groups .group").length) {
+function refreshFound() {
+  const original = $("#original").value.trim();
+  const hint = $("#found");
+  hint.className = "hint";
+  if (!original) {
+    hint.textContent = "Type a name, place, school, or any words that appear in your text.";
+  } else {
+    const n = occurrences($("#state").value, original);
+    hint.textContent = n
+      ? `Found ${n === 1 ? "once" : `${n} times`} in your text. Every occurrence gets replaced.`
+      : "Not found in your text. Copy it exactly as it appears in step 1.";
+    hint.classList.add(n ? "ok" : "warn");
+  }
+  estimate();
+}
+
+function addGroup(name = "", values = []) {
+  const index = $$("#groups .group").length;
   if (index >= GROUP_COLORS.length) return;
   const el = document.createElement("div");
   el.className = "group";
   el.innerHTML = `
     <div class="group-head"><i style="background:${GROUP_COLORS[index]}"></i>
-      <input class="g-name" value="${esc(name || `Group ${index + 1}`)}" aria-label="Group name">
-      <button type="button" class="g-del" aria-label="Remove group">×</button></div>
-    <textarea class="g-values" rows="4" spellcheck="false" aria-label="Values, one per line">${esc(values.join("\n"))}</textarea>`;
-  $(".g-del", el).onclick = () => el.remove();
+      <input class="g-name" value="${esc(name || (index ? "Group B" : "Group A"))}" aria-label="Group name">
+      ${index ? '<button type="button" class="g-del" aria-label="Remove group">×</button>' : ""}</div>
+    <textarea class="g-values" rows="5" spellcheck="false" placeholder="One value per line" aria-label="Values, one per line">${esc(values.join("\n"))}</textarea>`;
+  const del = $(".g-del", el);
+  if (del) del.onclick = () => { el.remove(); $("#add-group").hidden = false; estimate(); };
+  $(".g-values", el).addEventListener("input", estimate);
   $("#groups").append(el);
-  $("#add-group").disabled = $$("#groups .group").length >= GROUP_COLORS.length;
+  $("#add-group").hidden = $$("#groups .group").length >= GROUP_COLORS.length;
 }
 
-function readGroups() {
-  const out = {};
+function readSwap() {
+  const original = $("#original").value.trim();
+  if (!original) throw new Error("Type the words you want to swap out (step 3).");
+  if (!occurrences($("#state").value, original)) throw new Error(`“${original}” isn't in your text. Copy it exactly as it appears in step 1.`);
+  const groups = {};
   for (const g of $$("#groups .group")) {
     const values = $(".g-values", g).value.split("\n").map((v) => v.trim()).filter(Boolean);
-    if (values.length) out[$(".g-name", g).value.trim() || "group"] = values;
+    if (values.length) groups[$(".g-name", g).value.trim() || "Group"] = values;
   }
-  return out;
+  if (!Object.keys(groups).length) throw new Error("List at least one thing to swap in (step 3).");
+  return { original, groups };
 }
 
 /* ---------- examples ---------- */
 
 async function loadExamples() {
   ui.examples = await (await fetch("/api/examples")).json();
-  fillExampleSelect();
+  fillExamples();
 }
 
-function fillExampleSelect() {
+function fillExamples() {
   const wantSwap = ui.mode === "swap";
   const list = ui.examples.filter((e) => (e.mode === "swap") === wantSwap);
   $("#example").innerHTML = list.map((e) => `<option value="${e.id}">${esc(e.title)}</option>`).join("");
@@ -121,49 +215,129 @@ function fillExampleSelect() {
 
 function applyExample(ex) {
   const q = ex.question;
-  if (ex.mode === "swap") {
-    $("#template").value = ex.template;
-    $("#slot").value = ex.slot || "name";
-    renderGroups(ex.groups);
-  } else {
-    $("#state").value = ex.state;
-    setGranularity(ex.granularity || "word");
-  }
+  $("#state").value = ex.state;
   $("#instructions").value = q.instructions;
-  if (q.type === "score") $("#options").value = q.criteria.join("\n");
-  else if (q.type === "choice") $("#options").value = Object.entries(q.criteria).map(([k, v]) => `${k}: ${v}`).join("\n");
-  else $("#options").value = "";
-  setQType(q.type);
+  if (q.type === "choice") setQType("choice", Object.entries(q.criteria).map(([k, v]) => [k, v === k ? "" : v]));
+  else if (q.type === "score") setQType("score", q.criteria.map((c) => [c]));
+  else setQType("noul");
   refreshTargets(q.target);
-  if (ui.mode === "live") liveSoon();
+  if (ex.granularity) setGranularity(ex.granularity);
+  if (ex.mode === "swap") {
+    $("#original").value = ex.swap;
+    $("#groups").innerHTML = "";
+    Object.entries(ex.groups).forEach(([name, values]) => addGroup(name, values));
+    refreshFound();
+  }
+  clearResults();
+  estimate();
+  liveSoon();
 }
 
 /* ---------- modes ---------- */
 
 function setMode(mode) {
   stop();
-  const wasSwap = ui.mode === "swap";
+  const switchedKind = (ui.mode === "swap") !== (mode === "swap");
   ui.mode = mode;
-  $$(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.mode === mode)));
+  $$(".modes button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.mode === mode)));
   $$("[data-show]").forEach((el) => (el.hidden = !el.dataset.show.split(" ").includes(mode)));
   $$("[data-panel]").forEach((el) => (el.hidden = el.dataset.panel !== mode));
-  if (wasSwap !== (mode === "swap") || !$("#example").options.length) fillExampleSelect();
-  if (mode === "live") liveSoon();
+  $("#run").textContent = RUN_LABEL[mode] || "Run";
+  hideError();
+  if (switchedKind || !$("#example").options.length) fillExamples();
+  else { clearResults(); estimate(); }
+  liveSoon();
 }
 
 function setGranularity(g) {
   ui.granularity = g;
-  $$("#granularity button").forEach((b) => b.classList.toggle("on", b.dataset.g === g));
+  $$("#granularity button").forEach((b) => {
+    b.classList.toggle("on", b.dataset.g === g);
+    b.setAttribute("aria-checked", String(b.dataset.g === g));
+  });
+  estimate();
 }
 
+function clearResults() {
+  for (const m of ["xray", "flip", "swap"]) {
+    $(`#${m}-empty`).hidden = false;
+    $(`#${m}-out`).hidden = true;
+  }
+  $("#answer").hidden = ui.mode !== "live" || !$("#answer-dist").innerHTML;
+}
+
+/* ---------- estimates, progress, errors ---------- */
+
+function pieces(text, g) {
+  if (g === "word") return (text.match(/\S+/g) || []).length;
+  const re = g === "phrase" ? /[^.!?,;:\n]+/g : /[^.!?\n]+/g;
+  return (text.match(re) || []).filter((s) => s.trim()).length;
+}
+
+function estimate() {
+  const el = $("#estimate");
+  let calls = 0;
+  const text = $("#state").value;
+  if (ui.mode === "xray") calls = pieces(text, ui.granularity) + 1;
+  else if (ui.mode === "flip") calls = pieces(text, ui.granularity) + 4;
+  else if (ui.mode === "swap") calls = $$("#groups .g-values").reduce((n, t) => n + t.value.split("\n").filter((v) => v.trim()).length, 0) + 1;
+  if (!calls || ui.mode === "live") return (el.textContent = "");
+  const time = ui.secPerCall ? ` · about ${duration(calls * ui.secPerCall)} on this machine` : "";
+  el.textContent = `${ui.mode === "flip" ? "At least " : "About "}${calls} questions to the model${time}. Anything you've run before is instant.`;
+}
+
+let progress = { done: 0, total: 0, started: 0, modelSeconds: 0, fresh: 0 };
+
+function startProgress(total) {
+  progress = { done: 0, total, started: performance.now(), modelSeconds: 0, fresh: 0 };
+  $("#progress").hidden = false;
+  $("#estimate").hidden = true;
+  tickProgress();
+}
+
+function stepProgress(seconds = 0, n = 1) {
+  progress.done += n;
+  if (seconds > 0.01) { progress.modelSeconds += seconds; progress.fresh += n; }
+  tickProgress();
+}
+
+function tickProgress() {
+  const { done, total } = progress;
+  $("#progress-fill").style.width = total ? `${Math.min(100, (done / total) * 100)}%` : "0%";
+  const rate = progress.fresh ? progress.modelSeconds / progress.fresh : ui.secPerCall;
+  const left = rate && total > done ? ` · about ${duration((total - done) * rate)} left` : "";
+  $("#progress-text").textContent = total ? `Asked ${done} of ${total}${left}` : "Starting…";
+}
+
+function endProgress() {
+  if (progress.fresh >= 3) ui.secPerCall = progress.modelSeconds / progress.fresh;
+  $("#progress").hidden = true;
+  $("#estimate").hidden = false;
+  estimate();
+}
+
+function showError(message) {
+  $("#error").textContent = message;
+  $("#error").hidden = false;
+}
+function hideError() { $("#error").hidden = true; }
+
 /* ---------- streaming ---------- */
+
+async function errorText(res) {
+  try {
+    const body = await res.json();
+    if (typeof body.detail === "string") return body.detail;
+    if (Array.isArray(body.detail)) return body.detail.map((d) => d.msg).join(". ");
+  } catch {}
+  return `The server answered ${res.status}.`;
+}
 
 async function streamPost(url, body, onEvent) {
   ui.controller = new AbortController();
   $("#run").disabled = true;
-  $("#stop").disabled = false;
-  const started = performance.now();
-  const tick = setInterval(() => status(null, started), 250);
+  hideError();
+  startProgress(0);
   try {
     const res = await fetch(url, {
       method: "POST",
@@ -171,7 +345,7 @@ async function streamPost(url, body, onEvent) {
       body: JSON.stringify(body),
       signal: ui.controller.signal,
     });
-    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+    if (!res.ok) throw new Error(await errorText(res));
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -185,27 +359,17 @@ async function streamPost(url, body, onEvent) {
         buffer = buffer.slice(nl + 1);
         if (!line.trim()) continue;
         const event = JSON.parse(line);
-        if (event.event === "error") throw new Error(event.message);
+        if (event.event === "error") throw new Error(`The model backend failed: ${event.message}`);
         onEvent(event);
       }
     }
   } catch (err) {
-    if (err.name !== "AbortError") ui.lastError = String(err.message || err);
+    if (err.name !== "AbortError") showError(err.message || String(err));
   } finally {
-    clearInterval(tick);
-    status(ui.lastError ? `error: ${ui.lastError}` : null, started, true);
-    ui.lastError = null;
     ui.controller = null;
     $("#run").disabled = false;
-    $("#stop").disabled = true;
+    endProgress();
   }
-}
-
-let progress = { done: 0, total: 0 };
-function status(message, started, final = false) {
-  const secs = ((performance.now() - started) / 1000).toFixed(1);
-  const count = progress.total ? `${progress.done}/${progress.total} calls · ` : "";
-  $("#status").textContent = message ?? `${count}${secs}s${final ? "" : " …"}`;
 }
 
 function stop() {
@@ -214,26 +378,20 @@ function stop() {
 
 /* ---------- shared rendering ---------- */
 
-function renderDist(el, probs, q) {
-  const ids = Object.keys(probs);
-  const target = q.type === "score" ? null : q.target;
-  const labels = q.type === "noul" ? { true: "yes", false: "no" } : {};
-  const levels = q.type === "score" ? q.criteria : null;
-  el.innerHTML = ids
-    .map((id) => {
-      const p = probs[id];
-      const label = levels ? `${id} · ${levels[+id]}` : labels[id] || id;
-      return `<span class="label" title="${esc(label)}">${esc(label)}</span>
-        <span class="track"><span class="fill ${id === target ? "target" : ""}" style="width:${(p * 100).toFixed(1)}%"></span></span>
-        <span class="num">${fmt(p)}</span>`;
+function renderAnswer(probs, q, note = "") {
+  const names = q.type === "noul" ? { true: "Yes", false: "No" } : {};
+  const watched = q.type === "score" ? null : q.target;
+  $("#answer-dist").innerHTML = Object.entries(probs)
+    .map(([id, p]) => {
+      const label = q.type === "score" ? `${+id + 1} · ${q.criteria[+id]}` : names[id] || id;
+      const w = id === watched ? "watched" : "";
+      return `<span class="label ${w}" title="${esc(label)}">${esc(label)}</span>
+        <span class="track"><span class="fill ${w}" style="width:${(p * 100).toFixed(1)}%"></span></span>
+        <span class="num">${shown(p, { type: "noul" })}</span>`;
     })
     .join("");
-}
-
-function headline(el, value, q, meta = "") {
-  el.innerHTML = `<span class="big">${fmt(value)}</span>
-    <span class="what">${esc(targetLabel(q))} · ${esc(q.instructions)}</span>
-    <span class="meta">${esc(meta)}</span>`;
+  $("#answer-note").textContent = note;
+  $("#answer").hidden = false;
 }
 
 function buildReading(el, text, segments) {
@@ -243,9 +401,8 @@ function buildReading(el, text, segments) {
   for (const s of segments) {
     if (s.start > cursor) el.append(text.slice(cursor, s.start));
     const span = document.createElement("span");
-    span.className = "seg pending";
+    span.className = "seg";
     span.textContent = text.slice(s.start, s.end);
-    span.dataset.i = s.i;
     el.append(span);
     spans[s.i] = span;
     cursor = s.end;
@@ -263,282 +420,316 @@ const tip = $("#tooltip");
 function showTip(evt, html) {
   tip.innerHTML = html;
   tip.hidden = false;
-  const pad = 14;
-  const { innerWidth: w, innerHeight: h } = window;
   const r = tip.getBoundingClientRect();
-  tip.style.left = Math.min(evt.clientX + pad, w - r.width - 8) + "px";
-  tip.style.top = Math.min(evt.clientY + pad, h - r.height - 8) + "px";
+  tip.style.left = Math.min(evt.clientX + 14, innerWidth - r.width - 8) + "px";
+  tip.style.top = Math.min(evt.clientY + 14, innerHeight - r.height - 8) + "px";
 }
 const hideTip = () => (tip.hidden = true);
 
-/* ---------- X-ray ---------- */
+function quote(text, max = 40) {
+  const t = text.length > max ? text.slice(0, max - 1) + "…" : text;
+  return `“${esc(t)}”`;
+}
+
+/* ---------- 1. which words mattered ---------- */
 
 async function runXray() {
   const q = readQuestion();
-  const text = $("#state").value;
+  const text = readText();
   const view = { spans: [], segs: [], effects: {}, values: {}, base: 0 };
-  $("#xray-top").innerHTML = "";
-  $("#xray-legend").hidden = true;
-  progress = { done: 0, total: 0 };
+  const unit = ui.granularity;
 
   const repaint = () => {
     const scale = Math.max(0.04, ...Object.values(view.effects).map(Math.abs));
     for (const [i, e] of Object.entries(view.effects)) {
-      const span = view.spans[i];
-      span.classList.remove("pending");
-      span.style.backgroundColor = tint(e, scale);
+      view.spans[i].classList.remove("pending");
+      view.spans[i].style.backgroundColor = tint(e, scale);
     }
-    const ranked = Object.entries(view.effects).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 10);
-    $("#xray-top").innerHTML = `<div class="top-list"><h3>Pieces that moved it most</h3><div class="bars">${ranked
-      .map(([i, e]) => {
-        const w = (Math.abs(e) / scale) * 50;
-        return `<span class="label">${esc(view.segs[i].text)}</span>
-          <span class="track"><span class="bar ${e >= 0 ? "pos" : "neg"}" style="width:${w.toFixed(1)}%"></span></span>
-          <span class="num">${signed(e)}</span>`;
-      })
+    const ranked = Object.entries(view.effects).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 8);
+    $("#xray-top").innerHTML = `<div class="top-list"><h4>Biggest effects</h4><div class="bars">${ranked
+      .map(([i, e]) => `<span class="label">${esc(view.segs[i].text)}</span>
+          <span class="track"><span class="bar ${e >= 0 ? "pos" : "neg"}" style="width:${((Math.abs(e) / scale) * 50).toFixed(1)}%"></span></span>
+          <span class="num">${moved(e, q)}</span>`)
       .join("")}</div></div>`;
   };
 
-  await streamPost("/api/xray", { state: text, question: q, granularity: ui.granularity }, (ev) => {
+  await streamPost("/api/xray", { state: text, question: q, granularity: unit }, (ev) => {
     if (ev.event === "base") {
       view.base = ev.value;
       view.segs = ev.segments;
-      progress = { done: 1, total: ev.segments.length + 1 };
-      headline($("#xray-head"), ev.value, q, "baseline");
-      renderDist($("#primer-dist"), ev.probs, q);
+      progress.total = ev.segments.length + 1;
+      stepProgress(ev.seconds);
+      renderAnswer(ev.probs, q, "for your text as written");
+      $("#xray-empty").hidden = true;
+      $("#xray-out").hidden = false;
+      $("#xray-top").innerHTML = "";
+      $("#xray-head").innerHTML = `<div class="big">${shown(ev.value, q)}</div>
+        <p class="say">That's the ${watching(q)}. Now each ${unit} is removed on its own and the question is asked again.</p>`;
       view.spans = buildReading($("#xray-text"), text, ev.segments);
-      $("#xray-legend").hidden = false;
       view.spans.forEach((span, i) => {
+        span.classList.add("pending");
         span.onmousemove = (e) => {
-          if (!(i in view.effects)) return showTip(e, "not measured yet");
-          showTip(e, `Without “${esc(view.segs[i].text)}”: <b>${fmt(view.values[i])}</b><br>change: <b>${signed(-view.effects[i])}</b>`);
+          if (!(i in view.effects)) return showTip(e, "Not measured yet");
+          showTip(e, `Without ${quote(view.segs[i].text)}: <b>${shown(view.values[i], q)}</b><br>So this ${unit} is worth <b>${moved(view.effects[i], q)}</b>`);
         };
         span.onmouseleave = hideTip;
       });
     } else if (ev.event === "segment") {
       view.effects[ev.i] = ev.effect;
       view.values[ev.i] = ev.value;
-      progress.done += 1;
+      stepProgress(ev.seconds);
       repaint();
     } else if (ev.event === "done") {
-      $("#xray-head .meta").textContent = `${ev.calls} calls · ${ev.seconds < 0.05 ? "replayed from cache" : fmt(ev.seconds, 1) + "s of model time"}`;
+      const [i, e] = Object.entries(view.effects).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))[0] || [];
+      if (i === undefined) return;
+      $("#xray-head").innerHTML = `<div class="big">${shown(view.base, q)}</div>
+        <p class="say">That's the ${watching(q)}. The ${unit} doing the most work is <b>${quote(view.segs[i].text)}</b>. Without it, the ${watching(q)} goes from ${shown(view.base, q)} to <b>${shown(view.values[i], q)}</b>.</p>
+        <p class="meta">${ev.calls} questions asked${ev.seconds < 0.05 ? " · replayed from cache" : ` · ${duration(ev.seconds)} of model time`}</p>`;
     }
   });
 }
 
-/* ---------- Flip ---------- */
+/* ---------- 2. how close is it to changing ---------- */
 
 function flipChart(points, threshold) {
-  const W = 640, H = 170, L = 36, R = 12, T = 12, B = 26;
+  const W = 640, H = 180, L = 44, R = 12, T = 14, B = 28;
   const n = Math.max(points.length - 1, 1);
   const x = (i) => L + (i / n) * (W - L - R);
   const y = (v) => T + (1 - v) * (H - T - B);
   const path = points.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join("");
-  const ticks = [0, 0.5, 1].map((v) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`).join("");
-  const dots = points
-    .map((p, i) => `<circle class="pt" cx="${x(i)}" cy="${y(p.value)}" r="4"/><circle class="hit" data-i="${i}" cx="${x(i)}" cy="${y(p.value)}" r="12"/>`)
-    .join("");
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Tracked probability after each edit">
-    ${ticks}
-    <line class="threshold" x1="${L}" x2="${W - R}" y1="${y(threshold)}" y2="${y(threshold)}"/>
-    <text x="${W - R}" y="${y(threshold) - 6}" text-anchor="end">threshold ${threshold}</text>
+  const grid = [0, 0.5, 1].map((v) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${v * 100}%</text>`).join("");
+  const dots = points.map((p, i) => `<circle class="pt" cx="${x(i)}" cy="${y(p.value)}" r="4.5"/><circle class="hit" data-i="${i}" cx="${x(i)}" cy="${y(p.value)}" r="13"/>`).join("");
+  return `<p class="sub">How the answer moved, one deletion at a time</p>
+    <svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Answer after each deletion">
+    ${grid}<line class="threshold" x1="${L}" x2="${W - R}" y1="${y(threshold)}" y2="${y(threshold)}"/>
+    <text x="${W - R}" y="${y(threshold) - 7}" text-anchor="end">flips here (${Math.round(threshold * 100)}%)</text>
     <path class="line" d="${path}"/>${dots}
-    <text x="${L}" y="${H - 6}">start</text><text x="${W - R}" y="${H - 6}" text-anchor="end">edit ${points.length - 1}</text>
-  </svg>`;
+    <text x="${L}" y="${H - 6}">your text</text><text x="${W - R}" y="${H - 6}" text-anchor="end">after ${points.length - 1} change${points.length === 2 ? "" : "s"}</text></svg>`;
 }
 
 async function runFlip() {
   const q = readQuestion();
-  const text = $("#state").value;
-  const threshold = parseFloat($("#threshold").value) || 0.5;
-  let spans = [], segs = [], points = [];
-  $("#flip-summary").innerHTML = "";
-  $("#flip-chart").innerHTML = "";
-  progress = { done: 0, total: 0 };
+  const text = readText();
+  const threshold = Number($("#threshold").value) / 100;
+  const unit = ui.granularity;
+  let spans = [], segs = [], points = [], start = 0;
 
-  const drawChart = () => {
+  const draw = () => {
     $("#flip-chart").innerHTML = flipChart(points, threshold);
     $$("#flip-chart .hit").forEach((c) => {
       const p = points[+c.dataset.i];
-      c.onmousemove = (e) => showTip(e, `${esc(p.label)}<br>value: <b>${fmt(p.value)}</b>`);
+      c.onmousemove = (e) => showTip(e, `${p.label}<br>answer: <b>${shown(p.value, q)}</b>`);
       c.onmouseleave = hideTip;
     });
   };
-  const markRemoved = (removed) => {
-    spans.forEach((s, i) => s.classList.toggle("cut", removed.includes(i)));
-  };
+  const strike = (removed) => spans.forEach((s, i) => s.classList.toggle("cut", removed.includes(i)));
 
-  await streamPost("/api/flip", { state: text, question: q, granularity: ui.granularity, threshold }, (ev) => {
+  await streamPost("/api/flip", { state: text, question: q, granularity: unit, threshold }, (ev) => {
     if (ev.event === "base") {
       segs = ev.segments;
-      progress = { done: 1, total: segs.length + 1 };
-      headline($("#flip-head"), ev.value, q, `pushing ${ev.direction} past ${threshold}`);
-      renderDist($("#primer-dist"), ev.probs, q);
+      start = ev.value;
+      progress.total = segs.length + 1;
+      stepProgress();
+      renderAnswer(ev.probs, q, "for your text as written");
+      $("#flip-empty").hidden = true;
+      $("#flip-out").hidden = false;
+      $("#flip-head").innerHTML = `<div class="big">${shown(start, q)}</div>
+        <p class="say">The ${watching(q)} starts here. First every ${unit} is tested on its own, then the strongest ones are removed until the answer crosses ${Math.round(threshold * 100)}%.</p>`;
       spans = buildReading($("#flip-text"), text, segs);
-      spans.forEach((s) => s.classList.remove("pending"));
-      points = [{ value: ev.value, label: "original text" }];
-      drawChart();
+      points = [{ value: start, label: "your text as written" }];
+      draw();
     } else if (ev.event === "scan") {
-      progress.done += 1;
+      stepProgress();
     } else if (ev.event === "remove") {
-      progress.total += 1; progress.done += 1;
+      progress.total += 1;
+      stepProgress();
       const last = segs[ev.removed[ev.removed.length - 1]];
-      points.push({ value: ev.value, label: `removed “${last.text}”` });
-      markRemoved(ev.removed);
-      headline($("#flip-head"), ev.value, q, `${ev.removed.length} removed`);
-      drawChart();
+      points.push({ value: ev.value, label: `removed ${quote(last.text)}` });
+      strike(ev.removed);
+      draw();
     } else if (ev.event === "restore") {
-      points.push({ value: ev.value, label: `put back “${segs[ev.i].text}” (not needed)` });
-      markRemoved(ev.removed);
-      drawChart();
+      points.push({ value: ev.value, label: `put back ${quote(segs[ev.i].text)}, it wasn't needed` });
+      strike(ev.removed);
+      draw();
     } else if (ev.event === "done") {
-      markRemoved(ev.removed);
-      headline($("#flip-head"), ev.value, q, `${ev.calls} calls`);
-      const pieces = ev.removed.map((i) => `“${esc(segs[i].text)}”`).join(", ");
-      const unit = ui.granularity;
+      strike(ev.removed);
       const n = ev.removed.length;
-      $("#flip-summary").innerHTML = ev.flipped
-        ? `<div class="callout">Removing <b>${n}</b> ${unit}${n === 1 ? "" : "s"} moves ${esc(targetLabel(q))} from <b>${fmt(points[0].value)}</b> to <b>${fmt(ev.value)}</b>: ${pieces}.</div>`
-        : `<div class="callout">Couldn't cross ${threshold} by deleting. Best reached: <b>${fmt(ev.value)}</b>. The decision doesn't hang on any small part of this text.</div>`;
+      const list = ev.removed.map((i) => `<b>${quote(segs[i].text)}</b>`).join(", ");
+      $("#flip-head").innerHTML = ev.flipped
+        ? `<div class="big">${shown(start, q)}<span class="arrow">→</span>${shown(ev.value, q)}</div>
+           <p class="say">Deleting ${n === 1 ? "just one" : n} ${unit}${n === 1 ? "" : "s"} is enough to flip the ${watching(q)}: ${list}.
+           ${n <= 3 ? "That's a fragile decision." : "It takes some work to change this one."}</p>`
+        : `<div class="big">${shown(start, q)}<span class="arrow">→</span>${shown(ev.value, q)}</div>
+           <p class="say">Deleting ${unit}s couldn't push it past ${Math.round(threshold * 100)}%. The decision doesn't hang on any small part of this text.</p>`;
+      $("#flip-head").insertAdjacentHTML("beforeend", `<p class="meta">${ev.calls} questions asked</p>`);
     }
   });
 }
 
-/* ---------- Swap lab ---------- */
+/* ---------- 3. is it fair ---------- */
 
-function stripChart(groups, values) {
+function stripChart(groups, values, original) {
   const names = Object.keys(groups);
-  const W = 640, L = 16, R = 16, rowH = 64, T = 22, B = 30;
+  const W = 640, L = 16, R = 16, rowH = 70, T = 30, B = 30;
   const H = T + names.length * rowH + B;
-  // Zoom to the data: the interesting differences are often a few hundredths wide.
-  const ps = values.map((v) => v.p);
-  let lo = ps.length ? Math.min(...ps) : 0, hi = ps.length ? Math.max(...ps) : 1;
+  const ps = values.map((v) => v.p).concat(original ? [original.p] : []);
+  let lo = Math.min(...ps), hi = Math.max(...ps);
   const span = Math.max(hi - lo, 0.04);
-  lo = Math.max(0, lo - span * 0.25); hi = Math.min(1, hi + span * 0.25);
+  lo = Math.max(0, lo - span * 0.25);
+  hi = Math.min(1, hi + span * 0.25);
   if (hi - lo < 0.04) lo = Math.max(0, hi - 0.04);
   const step = [0.005, 0.01, 0.02, 0.05, 0.1, 0.25].find((s) => (hi - lo) / s <= 6) || 0.25;
-  const digits = step < 0.01 ? 3 : 2;
   const x = (v) => L + ((v - lo) / (hi - lo)) * (W - L - R);
-  const ticks = [];
-  for (let t = Math.ceil(lo / step) * step; t <= hi + 1e-9; t += step) ticks.push(t);
-  const axis = ticks
-    .map((v) => `<line class="grid" x1="${x(v)}" x2="${x(v)}" y1="${T - 6}" y2="${H - B}"/><text x="${x(v)}" y="${H - 10}" text-anchor="middle">${v.toFixed(digits)}</text>`)
-    .join("");
-  let rows = "";
+  const fmt = (v) => `${(v * 100).toFixed(step < 0.01 ? 1 : 0)}%`;
+  let svg = "";
+  for (let t = Math.ceil(lo / step) * step; t <= hi + 1e-9; t += step) {
+    svg += `<line class="grid" x1="${x(t)}" x2="${x(t)}" y1="${T - 8}" y2="${H - B}"/><text x="${x(t)}" y="${H - 10}" text-anchor="middle">${fmt(t)}</text>`;
+  }
+  if (original) {
+    svg += `<line class="baseline" x1="${x(original.p)}" x2="${x(original.p)}" y1="${T - 12}" y2="${H - B}"/>
+      <text x="${x(original.p)}" y="${T - 16}" text-anchor="middle">original</text>`;
+  }
   names.forEach((g, gi) => {
-    const cy = T + gi * rowH + rowH / 2;
+    const cy = T + gi * rowH + rowH / 2 + 6;
     const color = GROUP_COLORS[gi];
     const vals = values.filter((v) => v.group === g);
     vals.forEach((v, k) => {
       const jitter = ((k % 5) - 2) * 5;
-      rows += `<circle class="dot" cx="${x(v.p)}" cy="${cy + jitter}" r="6" style="fill:${color}"/>
+      svg += `<circle class="dot" cx="${x(v.p)}" cy="${cy + jitter}" r="6.5" style="fill:${color}"/>
         <circle class="hit" cx="${x(v.p)}" cy="${cy + jitter}" r="11" data-g="${esc(g)}" data-v="${esc(v.value)}" data-p="${v.p}"/>`;
     });
-    if (vals.length) {
-      const mean = vals.reduce((a, b) => a + b.p, 0) / vals.length;
-      rows += `<line class="mean" x1="${x(mean)}" x2="${x(mean)}" y1="${cy - 20}" y2="${cy + 20}" style="stroke:${color}"/>
-        <text x="${L}" y="${cy - 22}">${esc(g)} · mean ${fmt(mean, 3)}</text>`;
-    } else {
-      rows += `<text x="${L}" y="${cy - 22}">${esc(g)}</text>`;
-    }
+    const mean = vals.length ? vals.reduce((a, b) => a + b.p, 0) / vals.length : null;
+    if (mean !== null) svg += `<line class="mean" x1="${x(mean)}" x2="${x(mean)}" y1="${cy - 22}" y2="${cy + 22}" style="stroke:${color}"/>`;
+    svg += `<text class="glabel" x="${L}" y="${cy - 26}">${esc(g)}${mean !== null ? ` · average ${fmt(mean)}` : ""}</text>`;
   });
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Probability for each value, grouped">${axis}${rows}</svg>`;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Answer for every swapped value">${svg}</svg>
+    <p class="muted" style="font-size:12.5px;margin:4px 0 0">Each dot is one version of your text. The thick line is the group's average. The axis is zoomed in, so check the numbers before reading too much into the distance.</p>`;
 }
 
 async function runSwap() {
   const q = readQuestion();
-  const groups = readGroups();
+  const text = readText();
+  const { original, groups } = readSwap();
   const values = [];
-  progress = { done: 0, total: 0 };
-  $("#swap-head").innerHTML = "";
-  $("#swap-table-wrap").hidden = true;
+  let base = null;
 
   const draw = () => {
-    $("#swap-chart").innerHTML = stripChart(groups, values);
+    $("#swap-chart").innerHTML = stripChart(groups, values, base);
     $$("#swap-chart .hit").forEach((c) => {
-      c.onmousemove = (e) => showTip(e, `${esc(c.dataset.v)}<br>${esc(c.dataset.g)}: <b>${fmt(c.dataset.p, 3)}</b>`);
+      c.onmousemove = (e) => showTip(e, `${esc(c.dataset.v)} (${esc(c.dataset.g)})<br>answer: <b>${shown(+c.dataset.p, q)}</b>`);
       c.onmouseleave = hideTip;
     });
   };
 
-  await streamPost(
-    "/api/swap",
-    { template: $("#template").value, slot: $("#slot").value.trim() || "name", groups, question: q },
-    (ev) => {
-      if (ev.event === "start") {
-        progress = { done: 0, total: ev.total };
-        draw();
-      } else if (ev.event === "value") {
-        values.push(ev);
-        progress.done += 1;
-        draw();
-      } else if (ev.event === "done") {
-        const s = ev.summary;
-        const names = Object.keys(s).filter((k) => k !== "_gap");
-        const spread = names.map((g) => `${esc(g)} <b>${fmt(s[g].mean, 3)}</b>`).join(" vs ");
-        $("#swap-head").innerHTML = `<span class="big">${s._gap !== undefined ? fmt(s._gap, 3) : "–"}</span>
-          <span class="what">gap in ${esc(targetLabel(q))} between group means</span>
-          <span class="meta">${ev.calls} calls · ${ev.seconds < 0.05 ? "replayed from cache" : fmt(ev.seconds, 1) + "s"}</span>`;
-        $("#swap-chart").insertAdjacentHTML("beforeend", `<div class="callout">${spread}. Each dot is the same text with one value swapped in. Spread inside a group is noise from the values themselves; a gap between groups is what to look at.</div>`);
-        $("#swap-table").innerHTML = `<table><thead><tr><th>Group</th><th>Value</th><th class="num">${esc(targetLabel(q))}</th></tr></thead><tbody>${values
-          .map((v) => `<tr><td>${esc(v.group)}</td><td>${esc(v.value)}</td><td class="num">${fmt(v.p, 3)}</td></tr>`)
-          .join("")}</tbody></table>`;
-        $("#swap-table-wrap").hidden = false;
-      }
-    },
-  );
+  await streamPost("/api/swap", { text, original, groups, question: q }, (ev) => {
+    if (ev.event === "start") {
+      base = ev.original;
+      progress.total = ev.total + 1;
+      stepProgress();
+      renderAnswer(base.probs, q, `with “${original}”`);
+      $("#swap-empty").hidden = true;
+      $("#swap-out").hidden = false;
+      $("#swap-table-wrap").hidden = true;
+      $("#swap-head").innerHTML = `<div class="big">${shown(base.p, q)}</div>
+        <p class="say">The ${watching(q)} with <b>“${esc(original)}”</b>. Now the same text is asked once for each value you listed.</p>`;
+      draw();
+    } else if (ev.event === "value") {
+      values.push(ev);
+      stepProgress();
+      draw();
+    } else if (ev.event === "done") {
+      const s = ev.summary;
+      const names = Object.keys(s).filter((k) => k !== "_gap");
+      const avgs = names.map((g) => `${esc(g)} average <b>${shown(s[g].mean, q)}</b>`).join(", ");
+      const all = values.map((v) => v.p);
+      const spread = Math.max(...all) - Math.min(...all);
+      const gap = s._gap;
+      const verdict = gap === undefined
+        ? `Across everything you tried, the answer ranged over <b>${size(spread, q)}</b>.`
+        : gap * 100 < 1
+          ? `The groups are less than 1 point apart, so on this text the swap barely matters.`
+          : `The groups are <b>${size(gap, q)}</b> apart. Since nothing else changed, that gap comes from the swap alone.`;
+      $("#swap-head").innerHTML = `<div class="big">${gap === undefined ? size(spread, q) : size(gap, q)}</div>
+        <p class="say">${gap === undefined ? "spread" : "gap between the groups"}. ${avgs}. The original text scored ${shown(base.p, q)}. ${verdict}</p>
+        <p class="meta">${ev.calls} questions asked</p>`;
+      $("#swap-table").innerHTML = `<table><thead><tr><th>Group</th><th>Swapped in</th><th class="num">${esc(watching(q))}</th></tr></thead><tbody>${values
+        .slice()
+        .sort((a, b) => b.p - a.p)
+        .map((v) => `<tr><td>${esc(v.group)}</td><td>${esc(v.value)}</td><td class="num">${shown(v.p, q)}</td></tr>`)
+        .join("")}</tbody></table>`;
+      $("#swap-table-wrap").hidden = false;
+    }
+  });
 }
 
-/* ---------- Live ---------- */
+/* ---------- 4. play with it ---------- */
 
 let liveTimer = null;
 let liveSeq = 0;
 function liveSoon() {
+  if (ui.mode !== "live") return;
   clearTimeout(liveTimer);
-  liveTimer = setTimeout(runLive, 350);
+  liveTimer = setTimeout(runLive, 450);
 }
 
 async function runLive() {
-  if (ui.mode !== "live") return;
-  const q = readQuestion();
+  let q, text;
+  try {
+    q = readQuestion();
+    text = readText();
+  } catch (err) {
+    return showError(err.message);
+  }
+  hideError();
   const seq = ++liveSeq;
+  $("#live-head").innerHTML = `<p class="muted">Asking…</p>`;
   const started = performance.now();
   try {
     const res = await fetch("/api/decide", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ state: $("#state").value, question: q }),
+      body: JSON.stringify({ state: text, question: q }),
     });
+    if (!res.ok) throw new Error(await errorText(res));
     const out = await res.json();
     if (seq !== liveSeq) return;
-    if (!res.ok) throw new Error(out.detail || res.statusText);
     const ms = Math.round(performance.now() - started);
-    headline($("#live-head"), out.value, q, out.cached ? "from cache" : `${ms} ms round trip`);
-    renderDist($("#live-dist"), out.probs, q);
-    renderDist($("#primer-dist"), out.probs, q);
+    $("#live-head").innerHTML = `<div class="big">${shown(out.value, q)}</div>
+      <p class="say">${watching(q)[0].toUpperCase() + watching(q).slice(1)} for the text as it is right now. Change a word and see what happens.</p>
+      <p class="meta">${out.cached ? "seen before, from cache" : `answered in ${ms} ms`}</p>`;
+    renderAnswer(out.probs, q, "updates as you type");
   } catch (err) {
-    $("#live-head").innerHTML = `<p class="muted">error: ${esc(err.message)}</p>`;
+    if (seq === liveSeq) showError(err.message);
   }
 }
 
 /* ---------- wiring ---------- */
 
-$$(".tabs button").forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
-$$("#qtype button").forEach((b) => (b.onclick = () => { setQType(b.dataset.type); if (ui.mode === "live") liveSoon(); }));
+$$(".modes button").forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
+$$("#qtype button").forEach((b) => (b.onclick = () => { setQType(b.dataset.type); clearResults(); liveSoon(); }));
 $$("#granularity button").forEach((b) => (b.onclick = () => setGranularity(b.dataset.g)));
-$("#options").addEventListener("input", () => { refreshTargets(); if (ui.mode === "live") liveSoon(); });
+$("#add-option").onclick = () => optionRow();
+$("#add-group").onclick = () => { addGroup(); estimate(); };
 $("#example").onchange = () => applyExample(ui.examples.find((e) => e.id === $("#example").value));
-$("#add-group").onclick = () => addGroup();
 $("#stop").onclick = stop;
-["#state", "#instructions", "#target"].forEach((s) => $(s).addEventListener("input", () => ui.mode === "live" && liveSoon()));
-$("#target").addEventListener("change", () => ui.mode === "live" && liveSoon());
-$("#editor").onsubmit = (e) => {
+$("#threshold").oninput = () => ($("#threshold-value").textContent = `${$("#threshold").value}%`);
+$("#state").addEventListener("input", () => { estimate(); if (ui.mode === "swap") refreshFound(); liveSoon(); });
+$("#original").addEventListener("input", refreshFound);
+$("#instructions").addEventListener("input", liveSoon);
+$("#target").addEventListener("change", liveSoon);
+$("#setup").onsubmit = async (e) => {
   e.preventDefault();
   if (ui.controller) return;
-  ({ xray: runXray, flip: runFlip, swap: runSwap }[ui.mode] || (() => {}))();
+  hideError();
+  try {
+    await ({ xray: runXray, flip: runFlip, swap: runSwap }[ui.mode] || (async () => {}))();
+  } catch (err) {
+    showError(err.message);
+  }
 };
 
-setGranularity("word");
+setGranularity("phrase");
+setQType("noul");
 setMode("xray");
 checkBackend();
 loadExamples();

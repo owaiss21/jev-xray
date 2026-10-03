@@ -88,8 +88,11 @@ def cmd_swap(args) -> int:
     example = _load(args.example)
     question = Question.from_dict(example["question"])
     backend = make_backend(args.backend)
-    for event in swap(backend, example["template"], example.get("slot", "name"), example["groups"], question):
-        if event["event"] == "value":
+    for event in swap(backend, example["state"], example["swap"], example["groups"], question):
+        if event["event"] == "start":
+            o = event["original"]
+            print(f"  {'original':<12} {o['value']:<24} {o['p']:.3f}")
+        elif event["event"] == "value":
             print(f"  {event['group']:<12} {event['value']:<24} {event['p']:.3f}")
         elif event["event"] == "done":
             print()

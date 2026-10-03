@@ -37,8 +37,10 @@ def test_bad_question_is_422():
 
 
 def test_swap_without_slot_is_422():
-    body = {"template": "no slot", "slot": "name", "groups": {"A": ["x"]}, "question": QUESTION}
-    assert client.post("/api/swap", json=body).status_code == 422
+    body = {"text": "no name here", "original": "Emily", "groups": {"A": ["x"]}, "question": QUESTION}
+    response = client.post("/api/swap", json=body)
+    assert response.status_code == 422
+    assert "Couldn't find" in response.json()["detail"]
 
 
 def test_index_served():

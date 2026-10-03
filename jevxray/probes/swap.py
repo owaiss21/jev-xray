@@ -1,12 +1,13 @@
 """Counterfactual swaps.
 
-Write the input once with a slot in it, e.g. "{name} has five years of experience...", give a few
-groups of values for the slot, and measure the tracked probability for every value. If the groups
-differ, the only thing that can explain it is the slot.
+Take a piece of text, pick something in it (a name, a university, a city), and give a few groups
+of things to put there instead. Every version is asked the same question. If the groups land in
+different places, the swapped words are the only thing that can explain it.
 """
 
 from __future__ import annotations
 
+import re
 import statistics
 from typing import Iterator
 
@@ -14,30 +15,59 @@ from ..backends import Backend
 from ..question import Question
 
 
-def fill(template: str, slot: str, value: str) -> str:
-    return template.replace("{" + slot + "}", value)
+def find(text: str, original: str) -> list[re.Match]:
+    """Occurrences of `original`, ignoring case and runs of whitespace."""
+    words = original.split()
+    if not words:
+        return []
+    pattern = r"\s+".join(re.escape(w) for w in words)
+    return list(re.finditer(pattern, text, flags=re.IGNORECASE))
+
+
+def replace(text: str, original: str, value: str) -> str:
+    out, cursor = [], 0
+    for m in find(text, original):
+        out.append(text[cursor : m.start()])
+        out.append(value)
+        cursor = m.end()
+    out.append(text[cursor:])
+    return "".join(out)
 
 
 def swap(
     backend: Backend,
-    template: str,
-    slot: str,
+    text: str,
+    original: str,
     groups: dict[str, list[str]],
     question: Question,
 ) -> Iterator[dict]:
-    if "{" + slot + "}" not in template:
-        raise ValueError(f"the template has no {{{slot}}} placeholder")
-    jobs = [(group, value) for group, values in groups.items() for value in values if value.strip()]
-    yield {"event": "start", "total": len(jobs), "groups": list(groups)}
-    states = [fill(template, slot, value) for _, value in jobs]
+    original = original.strip()
+    if not original:
+        raise ValueError("Type the words you want to swap out.")
+    hits = find(text, original)
+    if not hits:
+        raise ValueError(f"Couldn't find “{original}” in the text. Copy it exactly as it appears.")
+    jobs = [(group, value.strip()) for group, values in groups.items() for value in values if value.strip()]
+    if not jobs:
+        raise ValueError("Add at least one value to swap in.")
+
+    base = backend.read(text, question)
+    yield {
+        "event": "start",
+        "total": len(jobs),
+        "groups": list(groups),
+        "occurrences": len(hits),
+        "original": {"value": original, "p": base.value, "probs": base.probs},
+    }
+    states = [replace(text, original, value) for _, value in jobs]
     results: dict[str, list[float]] = {g: [] for g in groups}
-    seconds = 0.0
+    seconds = base.seconds
     for i, reading in backend.read_many(states, question):
         group, value = jobs[i]
         results[group].append(reading.value)
         seconds += reading.seconds
         yield {"event": "value", "group": group, "value": value, "p": reading.value}
-    yield {"event": "done", "summary": summarize(results), "calls": len(jobs), "seconds": seconds}
+    yield {"event": "done", "summary": summarize(results), "calls": len(jobs) + 1, "seconds": seconds}
 
 
 def summarize(results: dict[str, list[float]]) -> dict:
