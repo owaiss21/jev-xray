@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>jev-xray</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%230b0b0b%22/%3E%3Crect x=%227%22 y=%2219%22 width=%224%22 height=%226%22 rx=%221%22 fill=%22%23e34948%22/%3E%3Crect x=%2214%22 y=%2213%22 width=%224%22 height=%2212%22 rx=%221%22 fill=%22%23fcfcfb%22/%3E%3Crect x=%2221%22 y=%227%22 width=%224%22 height=%2218%22 rx=%221%22 fill=%22%232a78d6%22/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>jev-xray</h1>
+      <p>A decision model answers with a number. Numbers can be measured.</p>
+    </div>
+    <div class="backend" id="backend"><span class="dot"></span><span id="backend-label">connecting…</span></div>
+  </header>
+
+  <section class="primer" aria-label="How it works">
+    <div class="primer-step">
+      <span class="primer-tag">state</span>
+      <p>Any text: an email, a ticket, a resume.</p>
+    </div>
+    <div class="primer-arrow" aria-hidden="true">+</div>
+    <div class="primer-step">
+      <span class="primer-tag">question</span>
+      <p>Yes/no, pick one, or a score. You write the options.</p>
+    </div>
+    <div class="primer-arrow" aria-hidden="true">→</div>
+    <div class="primer-step primer-out">
+      <span class="primer-tag">probabilities</span>
+      <div id="primer-dist" class="dist small"><p class="muted">Run something to see the raw output.</p></div>
+    </div>
+    <p class="primer-note">No text is generated, so there's no explanation to read. But a probability can be measured: change the input, ask again, compare. Every view below is just that, done carefully.</p>
+  </section>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-mode="xray" aria-selected="true">X-ray<small>which words decided it</small></button>
+    <button role="tab" data-mode="flip">Flip<small>smallest change that flips it</small></button>
+    <button role="tab" data-mode="swap">Swap lab<small>same input, one thing changed</small></button>
+    <button role="tab" data-mode="live">Live<small>watch it as you type</small></button>
+  </nav>
+
+  <main class="workbench">
+    <form class="editor" id="editor" autocomplete="off">
+      <label class="field">
+        <span>Example</span>
+        <select id="example"></select>
+      </label>
+
+      <label class="field" data-show="xray flip live">
+        <span>Input text</span>
+        <textarea id="state" rows="11" spellcheck="false"></textarea>
+      </label>
+
+      <div data-show="swap">
+        <label class="field">
+          <span>Template <em>(put the slot in curly braces)</em></span>
+          <textarea id="template" rows="9" spellcheck="false"></textarea>
+        </label>
+        <label class="field inline">
+          <span>Slot</span>
+          <input id="slot" value="name">
+        </label>
+        <div id="groups" class="groups"></div>
+        <button type="button" class="ghost" id="add-group">+ add group</button>
+      </div>
+
+      <fieldset class="question">
+        <legend>Question</legend>
+        <div class="segmented" id="qtype">
+          <button type="button" data-type="noul">Yes / no</button>
+          <button type="button" data-type="choice">Choice</button>
+          <button type="button" data-type="score">Score</button>
+        </div>
+        <label class="field">
+          <span>Ask</span>
+          <input id="instructions">
+        </label>
+        <label class="field" id="options-field">
+          <span id="options-label">Options</span>
+          <textarea id="options" rows="4" spellcheck="false"></textarea>
+        </label>
+        <label class="field inline" id="target-field">
+          <span>Track</span>
+          <select id="target"></select>
+        </label>
+      </fieldset>
+
+      <div class="row" data-show="xray flip">
+        <div class="segmented" id="granularity">
+          <button type="button" data-g="word">Words</button>
+          <button type="button" data-g="phrase">Phrases</button>
+          <button type="button" data-g="sentence">Sentences</button>
+        </div>
+        <label class="field inline" data-show="flip">
+          <span>Threshold</span>
+          <input id="threshold" type="number" min="0.05" max="0.95" step="0.05" value="0.5">
+        </label>
+      </div>
+
+      <div class="actions" data-show="xray flip swap">
+        <button type="submit" class="primary" id="run">Run</button>
+        <button type="button" class="ghost" id="stop" disabled>Stop</button>
+        <span class="status" id="status"></span>
+      </div>
+    </form>
+
+    <section class="results" aria-live="polite">
+      <div class="panel" data-panel="xray">
+        <div class="headline" id="xray-head"></div>
+        <div class="legend diverging" id="xray-legend" hidden>
+          <span><i class="sw neg"></i>pushes away</span>
+          <span class="scale"></span>
+          <span><i class="sw pos"></i>pushes towards</span>
+        </div>
+        <div class="reading" id="xray-text"><p class="muted">Pick an example and press Run. Each word gets removed on its own and the question is asked again. The color is how far the answer moved.</p></div>
+        <div id="xray-top"></div>
+      </div>
+
+      <div class="panel" data-panel="flip" hidden>
+        <div class="headline" id="flip-head"></div>
+        <div id="flip-chart"></div>
+        <div class="reading" id="flip-text"><p class="muted">Finds a small set of deletions that pushes the answer across the threshold. Removed pieces get struck through as it goes.</p></div>
+        <div id="flip-summary"></div>
+      </div>
+
+      <div class="panel" data-panel="swap" hidden>
+        <div class="headline" id="swap-head"></div>
+        <div id="swap-chart"><p class="muted">The template is filled once per value and asked the same question. If the groups land in different places, the slot is the only thing that changed.</p></div>
+        <details id="swap-table-wrap" hidden><summary>Table view</summary><div id="swap-table"></div></details>
+      </div>
+
+      <div class="panel" data-panel="live" hidden>
+        <div class="headline" id="live-head"><p class="muted">Edit the input text. The answer updates as you type.</p></div>
+        <div class="dist" id="live-dist"></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+  <script src="app.js" type="module"></script>
+</body>
+</html>

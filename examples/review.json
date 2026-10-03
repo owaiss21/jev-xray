@@ -1,0 +1,17 @@
+{
+  "order": 4,
+  "title": "How positive is this review?",
+  "granularity": "phrase",
+  "state": "The food was honestly some of the best ramen I've had outside Tokyo, rich broth and perfect noodles. Service was slow and our server forgot the drinks twice, and it's not cheap. Still, I'd go back for the broth alone.",
+  "question": {
+    "type": "score",
+    "instructions": "How positive is this restaurant review overall?",
+    "criteria": [
+      "Very negative",
+      "Negative",
+      "Mixed",
+      "Positive",
+      "Very positive"
+    ]
+  }
+}

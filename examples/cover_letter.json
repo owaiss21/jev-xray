@@ -1,0 +1,11 @@
+{
+  "order": 3,
+  "title": "Does this cover letter make the shortlist?",
+  "granularity": "sentence",
+  "state": "Dear hiring team,\n\nI'm applying for the Data Analyst role. For the past three years I've worked at a regional logistics company, where I built the weekly delivery dashboard in Power BI that operations still uses every morning. I taught myself SQL during that time and now write most of our reporting queries. Before that I worked in retail for four years, which I mention because it taught me how the numbers on a screen turn into real decisions on a shop floor. I don't have a degree in statistics, but I finished the Google Data Analytics certificate last spring. I'd be glad to walk you through the dashboard and the problems it solved.\n\nBest,\nDaniel",
+  "question": {
+    "type": "noul",
+    "instructions": "Should this applicant be shortlisted for an interview for a Data Analyst role?",
+    "target": "true"
+  }
+}

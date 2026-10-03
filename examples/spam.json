@@ -1,0 +1,11 @@
+{
+  "order": 2,
+  "title": "Is this email a scam?",
+  "granularity": "phrase",
+  "state": "Subject: Action required on your account\n\nHi Sarah,\n\nWe noticed an unusual sign-in to your payroll account from a new device. To avoid your March salary being held, please confirm your bank details within 24 hours using the secure link below. If you have already updated them, you can ignore this message.\n\nThanks,\nHR Payroll Team",
+  "question": {
+    "type": "noul",
+    "instructions": "Is this email a phishing or scam attempt?",
+    "target": "true"
+  }
+}

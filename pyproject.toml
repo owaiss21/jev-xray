@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jev-xray"
+version = "0.1.0"
+description = "See why a decision model decided what it did: word attributions, counterfactual swaps and minimal flips for Jev-style typed decisions."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Owais Mahmood" }]
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+
+[project.optional-dependencies]
+local = ["jevk5 @ git+https://github.com/allebee/jevk5@v0.3.0"]
+lab = ["matplotlib>=3.8"]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+jev-xray = "jevxray.cli:main"
+
+[tool.setuptools]
+packages = ["jevxray", "jevxray.backends", "jevxray.probes"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
