@@ -31,7 +31,6 @@ class Backend:
 
     def __init__(self, cache: Cache | None = None) -> None:
         self.cache = cache
-        self.calls = 0
 
     def _probabilities(self, state: str, question: Question) -> dict[str, float]:
         raise NotImplementedError
@@ -46,7 +45,6 @@ class Backend:
         started = time.perf_counter()
         probs = self._probabilities(state, question)
         seconds = time.perf_counter() - started
-        self.calls += 1
         if key is not None:
             self.cache.put(key, probs)
         return Reading(probs, question.value(probs), seconds)

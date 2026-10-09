@@ -36,7 +36,7 @@ def flip(
         "event": "base",
         "probs": base.probs,
         "answer": winner,
-        "segments": [{"i": p.index, "start": p.start, "end": p.end, "text": p.text} for p in parts],
+        "segments": [p.as_dict() for p in parts],
     }
 
     calls = 1

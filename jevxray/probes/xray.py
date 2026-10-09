@@ -24,7 +24,7 @@ def xray(
         "value": base.value,
         "probs": base.probs,
         "seconds": base.seconds,
-        "segments": [{"i": p.index, "start": p.start, "end": p.end, "text": p.text} for p in parts],
+        "segments": [p.as_dict() for p in parts],
     }
     variants = [without(state, parts, {p.index}) for p in parts]
     total_seconds = base.seconds

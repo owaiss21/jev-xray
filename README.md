@@ -103,6 +103,7 @@ jevxray/
 web/               plain HTML, CSS and JS, no build step
 scenarios/         the four cases, their checks and swap tests
 experiments/       the name-versus-stack study and its results
+docs/              WALKTHROUGH.md: reading order and a file-by-file reference
 ```
 
 The probes only ever call `backend.read(text, question)` and get a probability per option back, so supporting another model of the same kind is one small class.

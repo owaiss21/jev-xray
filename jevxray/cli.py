@@ -21,6 +21,12 @@ def _load(path: str) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def _setup(args):
+    """Load the scenario file and build the question and backend every command needs."""
+    example = _load(args.example)
+    return example, Question.from_dict(example["question"]), make_backend(args.backend)
+
+
 def _bar(value: float, width: int = 20) -> str:
     filled = round(abs(value) * width)
     return ("+" if value >= 0 else "-") * filled
@@ -39,9 +45,7 @@ def cmd_serve(args) -> int:
 def cmd_xray(args) -> int:
     from .probes import xray
 
-    example = _load(args.example)
-    question = Question.from_dict(example["question"])
-    backend = make_backend(args.backend)
+    example, question, backend = _setup(args)
     parts, effects = [], {}
     for event in xray(backend, example["state"], question, args.granularity or example.get("granularity", "phrase")):
         if event["event"] == "base":
@@ -62,9 +66,7 @@ def cmd_xray(args) -> int:
 def cmd_flip(args) -> int:
     from .probes import flip
 
-    example = _load(args.example)
-    question = Question.from_dict(example["question"])
-    backend = make_backend(args.backend)
+    example, question, backend = _setup(args)
     parts = []
     for event in flip(backend, example["state"], question, args.granularity or example.get("granularity", "phrase")):
         if event["event"] == "base":
@@ -87,9 +89,7 @@ def cmd_flip(args) -> int:
 def cmd_swap(args) -> int:
     from .probes import swap
 
-    example = _load(args.example)
-    question = Question.from_dict(example["question"])
-    backend = make_backend(args.backend)
+    example, question, backend = _setup(args)
     test = example["swaps"][args.which]
     for event in swap(backend, example["state"], test["original"], test["groups"], question):
         if event["event"] == "start":

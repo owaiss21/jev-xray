@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -25,7 +25,6 @@ class Question:
     instructions: str
     criteria: Any = None
     target: str | None = None
-    extra: dict = field(default_factory=dict, compare=False)
 
     def __post_init__(self) -> None:
         if self.kind not in KINDS:
@@ -78,6 +77,3 @@ class Question:
             criteria=data.get("criteria"),
             target=data.get("target"),
         )
-
-    def to_dict(self) -> dict:
-        return {**self.wire(), "target": self.target}

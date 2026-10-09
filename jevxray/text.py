@@ -21,6 +21,9 @@ class Segment:
     end: int
     text: str
 
+    def as_dict(self) -> dict:
+        return {"i": self.index, "start": self.start, "end": self.end, "text": self.text}
+
 
 def segments(text: str, granularity: str = "word") -> list[Segment]:
     if granularity == "word":

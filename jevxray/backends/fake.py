@@ -30,7 +30,6 @@ def _nudge(word: str, option: str) -> float:
 class FakeBackend(Backend):
     name = "fake"
     model = "keyword-overlap"
-    concurrency = 1
 
     def _probabilities(self, state: str, question: Question) -> dict[str, float]:
         words = _words(state)
